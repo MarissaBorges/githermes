@@ -1,9 +1,11 @@
-from playwright.sync_api import sync_playwright
+from playwright.sync_api import sync_playwright, Error, TimeoutError
 from markdownify import markdownify as md
 from bs4 import BeautifulSoup, Tag
 from urllib.parse import urljoin, urlparse
 import os
 from pprint import pprint
+import json
+import tldextract
 
 def verificar_https(url):
     url_analisada = urlparse(url)
@@ -17,7 +19,15 @@ def verificar_url_absoluto(url_base, url):
     url_absoluta = urljoin(url_base, url)
     return url_absoluta
 
-def extrair_conteudo_e_links_do_site(pagina, url):
+def carregar_config_urls(caminho_do_arquivo="config_urls.json"):
+    with open(caminho_do_arquivo, 'r', encoding='utf-8') as f:
+        return json.load(f)
+
+def extrair_dominio_principal(url_completa):
+    partes_extraidas = tldextract.extract(url_completa)
+    return partes_extraidas.top_domain_under_public_suffix
+
+def extrair_dados_da_pagina(pagina, url):
     try:
         pagina.goto(url, wait_until="domcontentloaded", timeout=15000)
         conteudo = pagina.content()
@@ -27,21 +37,19 @@ def extrair_conteudo_e_links_do_site(pagina, url):
         markdown = []
 
         soup = BeautifulSoup(conteudo, 'lxml')
-        for elemento in soup.find_all('a'):
+        for elemento in soup.find_all('a', href=True):
             if isinstance(elemento, Tag):
                 if elemento.has_attr('href'):
-                    url = elemento['href']
-                    if "guide" in str(url).lower() or "docs" in str(url).lower():
-                        links.append(url)
+                    links.append(url)
 
         markdown = md(conteudo)
         print("convertendo o conteúdo em markdown")
+        return {"links": links, "conteudo": markdown}
     except Exception as e:
         print(f"Ocorreu um erro ao acessar a página: {e}")
 
-    return {"links": links, "conteudo": markdown}
 
-def baixar_documentacao(nome_colecao, nome_arquivo, conteudo_markdown):
+def baixar_conteudo(nome_colecao, nome_arquivo, conteudo_markdown):
     caminho_colecao = f"data/collections/{nome_colecao}"
     print(f"Baixando conteúdo no caminho: {caminho_colecao}")
     os.makedirs(caminho_colecao, exist_ok=True)
@@ -50,38 +58,103 @@ def baixar_documentacao(nome_colecao, nome_arquivo, conteudo_markdown):
         print(f"Conteúdo da página salvo com sucesso. Caminho: {caminho_colecao}/{nome_arquivo}.md\n\n")
 
 def gerenciar_dados_da_pagina(nome_colecao, url):
+    config = carregar_config_urls()
+
+    DOMINIOS_CONFIAVEIS = config.get("mapa_de_vizinhancas", {})
+    PREFIXOS_DE_CAMINHO_PERMITIDOS = set(config.get("prefixos_de_caminho_permitidos", []))
+    EXTENSOES_PROIBIDAS = set(config.get("extensoes_proibidas", []))
+    SEGMENTOS_DE_CAMINHO_PROIBIDOS = set(config.get("segmentos_de_caminho_proibidos", []))
+    PROTOCOLOS_PROIBIDOS = set(config.get("protocolos_proibidos", []))
+
     print("Iniciando o processo...")
     url = verificar_https(url)
+
     urls_vistas = []
     urls_para_acessar = []
+    urls_rejeitadas = []
+
     if url not in urls_para_acessar:
         urls_para_acessar.append(url)
+
     with sync_playwright() as pw:
         navegador = pw.chromium.launch(headless=True)
         pagina = navegador.new_page()
         print("pagina criada")
+
+        dominio_principal = extrair_dominio_principal(url)
+
+        dominios_permitidos = set() 
+
+        if dominio_principal in DOMINIOS_CONFIAVEIS:
+            dominios_permitidos = DOMINIOS_CONFIAVEIS[dominio_principal]
+            print(f"INFO: Usando escopo amplo para a vizinhança conhecida: {dominio_principal}")
+        else:
+            dominio_exato = urlparse(url).hostname
+            dominios_permitidos.add(dominio_exato)
+            print(f"INFO: Usando escopo restrito para o domínio: {dominio_exato}")
+
         while urls_para_acessar:
             url_atual = urls_para_acessar.pop(0)
+
             if url_atual in urls_vistas:
                 continue
+
             print(f"\n\nVerificando a url: {url_atual}")
+
             parser = urlparse(url_atual)
             dominio = parser.hostname
             caminho = parser.path
+
             dominio_e_caminho = dominio + caminho
+            
             nome_arquivo = "".join(["_" if caracter in "/?:-" else caracter for caracter in dominio_e_caminho ])
+
             print(f"\n{nome_arquivo}")
+
             urls_vistas.append(url_atual)
-            dados_pagina_atual = extrair_conteudo_e_links_do_site(pagina, url_atual)
+
+            dados_pagina_atual = extrair_dados_da_pagina(pagina, url_atual)
+
             print(f"dados extraídos")
+
             if dados_pagina_atual:
                 novos_links = dados_pagina_atual["links"]
                 conteudo_markdown = dados_pagina_atual["conteudo"]
                 print(f"Novos links capturados:\n{novos_links}")
+
                 for link in novos_links:
-                    if link not in urls_vistas:
-                        urls_para_acessar.append(verificar_url_absoluto(url_atual, link))
-                baixar_documentacao(
+                    link_absoluto = verificar_url_absoluto(url_atual, link)
+                    parsed_url = urlparse(link_absoluto)
+                    url_limpa = parsed_url.scheme + "://" + parsed_url.netloc + parsed_url.path
+
+                    if not link_absoluto or link_absoluto.startswith('#') or url_limpa in urls_vistas or url_limpa in urls_para_acessar:
+                        continue
+
+                    parsed_url = urlparse(url_limpa)
+                    dominio_do_link = parsed_url.hostname
+                    if dominio_do_link not in dominios_permitidos:
+                        urls_rejeitadas.append(url_limpa)
+                        continue
+
+                    caminho_do_link = (parsed_url.path or "/").lower()
+                    if not any(caminho_do_link.startswith(prefixo) for prefixo in PREFIXOS_DE_CAMINHO_PERMITIDOS):
+                        urls_rejeitadas.append(url_limpa)
+                        continue
+
+                    if any(link_absoluto.startswith(protocolo) for protocolo in PROTOCOLOS_PROIBIDOS):
+                        urls_rejeitadas.append(link_absoluto)
+                        continue
+
+                    if any(caminho_do_link.endswith(ext) for ext in EXTENSOES_PROIBIDAS):
+                        urls_rejeitadas.append(url_limpa)
+                        continue
+
+                    if any(item_proibido in url_limpa.lower() for item_proibido in SEGMENTOS_DE_CAMINHO_PROIBIDOS):
+                        urls_rejeitadas.append(url_limpa)
+                        continue
+
+                    urls_para_acessar.append(verificar_url_absoluto(url_atual, link))
+                baixar_conteudo(
                 nome_arquivo=nome_arquivo,
                 nome_colecao=nome_colecao,
                 conteudo_markdown=conteudo_markdown
@@ -89,7 +162,7 @@ def gerenciar_dados_da_pagina(nome_colecao, url):
             else:
                 print("A página não possui dados ou não foi carregada")
 
-    return {"urls_vistas": urls_vistas, "urls_para_acessar": urls_para_acessar}
+    return {"urls_vistas": urls_vistas, "urls_para_acessar": urls_para_acessar, "urls_rejeitadas": urls_rejeitadas}
 
 pprint(gerenciar_dados_da_pagina(
   nome_colecao="python_docs",

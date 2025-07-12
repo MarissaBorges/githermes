@@ -6,6 +6,7 @@ import os
 from pprint import pprint
 import json
 import tldextract
+from time import time
 
 def verificar_https(url):
     url_analisada = urlparse(url)
@@ -20,8 +21,14 @@ def verificar_url_absoluto(url_base, url):
     return url_absoluta
 
 def carregar_config_urls(caminho_do_arquivo="config_urls.json"):
-    with open(caminho_do_arquivo, 'r', encoding='utf-8') as f:
-        return json.load(f)
+    try:
+        with open(caminho_do_arquivo, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except FileNotFoundError:
+        print(f"ERRO: Arquivo de configuração '{caminho_do_arquivo}' não encontrado.")
+    except json.JSONDecodeError:
+        print(f"ERRO: O arquivo '{caminho_do_arquivo}' tem um erro de sintaxe JSON.")
+    return {}
 
 def extrair_dominio_principal(url_completa):
     partes_extraidas = tldextract.extract(url_completa)
@@ -45,17 +52,26 @@ def extrair_dados_da_pagina(pagina, url):
         markdown = md(conteudo)
         print("convertendo o conteúdo em markdown")
         return {"links": links, "conteudo": markdown}
+    except TimeoutError as e:
+        print(f"FALHA ESPECÍFICA: Timeout ao acessar {url}. {e}")
+        return "TimeoutError"
+    except Error as e:
+        print(f"Ocorreu um erro de Playwright/Rede ao acessar {url}: {e}")
+        return None
     except Exception as e:
         print(f"Ocorreu um erro ao acessar a página: {e}")
-
+        return None
 
 def baixar_conteudo(nome_colecao, nome_arquivo, conteudo_markdown):
-    caminho_colecao = f"data/collections/{nome_colecao}"
-    print(f"Baixando conteúdo no caminho: {caminho_colecao}")
-    os.makedirs(caminho_colecao, exist_ok=True)
-    with open(f"{caminho_colecao}/{nome_arquivo}.md", 'w', encoding="utf-8") as file:
-        file.write(conteudo_markdown)
-        print(f"Conteúdo da página salvo com sucesso. Caminho: {caminho_colecao}/{nome_arquivo}.md\n\n")
+    try:
+        caminho_colecao = f"data/collections/{nome_colecao}"
+        print(f"Baixando conteúdo no caminho: {caminho_colecao}")
+        os.makedirs(caminho_colecao, exist_ok=True)
+        with open(f"{caminho_colecao}/{nome_arquivo}.md", 'w', encoding="utf-8") as file:
+            file.write(conteudo_markdown)
+            print(f"Conteúdo da página salvo com sucesso. Caminho: {caminho_colecao}/{nome_arquivo}.md\n\n")
+    except (OSError, IOError, TypeError) as e:
+        print(f"ERRO CRÍTICO ao salvar o arquivo {nome_arquivo}: {e}")
 
 def gerenciar_dados_da_pagina(nome_colecao, url):
     config = carregar_config_urls()
@@ -164,7 +180,13 @@ def gerenciar_dados_da_pagina(nome_colecao, url):
 
     return {"urls_vistas": urls_vistas, "urls_para_acessar": urls_para_acessar, "urls_rejeitadas": urls_rejeitadas}
 
-pprint(gerenciar_dados_da_pagina(
-  nome_colecao="python_docs",
-  url="https://docs.python.org/3/index.html"
-))
+if __name__ == "__main__":
+    tempo_inicio = time()
+
+    pprint(gerenciar_dados_da_pagina(
+    nome_colecao="python_docs",
+    url="https://docs.python.org/3/index.html"
+    ))
+
+    tempo_execucao = time() - tempo_inicio
+    print(f"O programa levou {tempo_execucao:.2f} segundos para executar")

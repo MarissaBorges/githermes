@@ -1,5 +1,5 @@
 {
-  "mapa_de_vizinhancas": {
+  "dominios_permitidos": {
     "python.org": [
       "docs.python.org",
       "wiki.python.org",
@@ -50,8 +50,8 @@
     "/help/",
     "/usage/"
   ],
-  "protocolos_proibidos": ["mailto:", "tel:", "javascript:"],
-  "extensoes_proibidas": [
+  "protocolos_invalidos": ["mailto:", "tel:", "javascript:"],
+  "extensoes_invalidas": [
     ".zip",
     ".pdf",
     ".epub",
@@ -80,7 +80,7 @@
     ".ico",
     ".py"
   ],
-  "segmentos_de_caminho_proibidos": [
+  "segmentos_de_caminho_invalidos": [
     "login",
     "logout",
     "register",

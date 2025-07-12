@@ -1,6 +1,6 @@
 from playwright.sync_api import sync_playwright
 from markdownify import markdownify as md
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, Tag
 
 with sync_playwright() as pw:
     navegador = pw.chromium.launch(headless=False)
@@ -12,12 +12,12 @@ with sync_playwright() as pw:
 
     soup = BeautifulSoup(conteudo, 'html.parser')
     print(soup.prettify())
-    for link in soup.find_all('a'):
-        link = getattr(link, 'get', None)
-        if link:
-            links.append(link['href'])
-        else:
-            print("Link não possui um atributo get")
+    for elemento in soup.find_all('a'):
+        if isinstance(elemento, Tag):
+            if elemento.has_attr('href'):
+                url = elemento['href']
+                if "guide" in str(url).lower() or "docs" in str(url).lower():
+                    links.append(url)
     
     markdown = md(conteudo)
     

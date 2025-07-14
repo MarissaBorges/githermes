@@ -29,7 +29,6 @@ class Validador:
         self.segmentos_invalidos = config.get("segmentos_de_caminho_invalidos", [])
         self.protocolos_invalidos = config.get("protocolos_invalidos", [])
         self.prefixos_permitidos = config.get("prefixos_de_caminho_permitidos", [])
-        self.dominios_permitidos = config.get("dominios_permitidos", [])
         self.versao = versao
 
     def _extrair_versao_da_url(self, url: str) -> Optional[str]:
@@ -46,31 +45,25 @@ class Validador:
             return (False, f"Versão desejada '{versao_solicitada}' é inválida.")
 
         if versao_encontrada is None:
-            return (True, "Versão não encontrada na URL, permitido.")
+            return (True, "Nenhuma versão encontrada na URL, permitido como genérico.")
 
         try:
             v_encontrada = version.parse(versao_encontrada)
         except version.InvalidVersion:
-            return (False, f"Versão encontrada na URL '{versao_encontrada}' é inválida.")
+            return (False, f"Versão encontrada '{versao_encontrada}' é inválida.")
 
         if v_encontrada.major != v_desejada.major:
-            return (False, f"Major version incorreta. Desejada: {v_desejada.major}, Encontrada: {v_encontrada.major}")
+            return (False, f"Major incorreto. Esperado: {v_desejada.major}, encontrado: {v_encontrada.major}")
 
-        if v_encontrada.release == (v_encontrada.major,):
-            return (True, f"Versão genérica '{v_encontrada}' permitida.")
+        if len(v_encontrada.release) == 1:
+            return (True, f"Versão genérica major '{v_encontrada.major}' permitida.")
 
-        if v_encontrada < v_desejada:
-            return (False, f"Versão encontrada '{v_encontrada}' é menor que a desejada '{v_desejada}'.")
-        
-        if v_encontrada > v_desejada:
-            return (False, f"Versão encontrada '{v_encontrada}' é maior que a desejada '{v_desejada}'.")
+        if v_encontrada.minor != v_desejada.minor:
+            return (False, f"Minor incorreto. Esperado: {v_desejada.minor}, encontrado: {v_encontrada.minor}")
 
         return (True, f"Versão '{v_encontrada}' compatível.")
 
     def validar_pagina(self, dados: DadosPagina) -> tuple[bool, str]:
-        if any(dados.url_original.endswith(extensao) for extensao in self.extensoes_invalidas):
-            return (False, "Extensão de arquivo invalida")
-        
         url = dados.url_original
         pagina_de_indice = url.endswith("/") or url.endswith("index.html")
 
@@ -87,15 +80,9 @@ class Validador:
         if any(palavra in conteudo_lower for palavra in palavras_invalidas):
             return (False, "Página inválida, foi encontrada uma palavra inválida")
         
-        versao_encontrada = self._extrair_versao_da_url(dados.url_original)
-        if versao_encontrada:
-            validacao, msg = self._validar_versao_da_url(self.versao, versao_encontrada)
-            if not validacao:
-                return False, msg
-
         return (True, "Página válida")
 
-    def validar_link_novo(self, url_base: str, link_url: str, dominios_permitidos: list) -> bool:
+    def validar_link_novo(self, url_base: str, link_url: str, dominios_permitidos: list) -> tuple[bool, str]:
         url_parsed = urlparse(url_base)
         str_url = url_parsed.scheme + "://" + url_parsed.netloc + url_parsed.path
 
@@ -104,20 +91,30 @@ class Validador:
         str_link = parsed_link.scheme + "://" + url_parsed.netloc + url_parsed.path
 
         dominio_do_link = parsed_link.hostname
-        if dominio_do_link not in dominios_permitidos:
-            return False
+        if dominio_do_link not in dominios_permitidos[0]:
+            return (False, f"Domínio inválido, domínio: {dominio_do_link}")
 
         caminho_do_link = (parsed_link.path or "/").lower()
-        if not any(caminho_do_link.startswith(prefixo) for prefixo in self.prefixos_permitidos):
-            return False
+        if not any(prefixo in caminho_do_link for prefixo in self.prefixos_permitidos):
+            if caminho_do_link != f"/{self.versao}/" or not f"/{self.versao}/".startswith(caminho_do_link):
+                return (False, f"Prefixo inválido, caminho do link: {caminho_do_link}")
+            
+        if any(link_url.endswith(extensao) for extensao in self.extensoes_invalidas):
+            return (False, "Extensão de arquivo invalida")
 
         if any(str_link.startswith(protocolo) for protocolo in self.protocolos_invalidos):
-            return False
+            return (False, f"Protocolo inválido, link: {str_link}")
 
-        if any(item_invalido in str_link.lower() for item_invalido in self.segmentos_invalidos):
-            return False
+        if any(item_invalido in caminho_do_link.lower() for item_invalido in self.segmentos_invalidos):
+            return (False, f"Segmento inválido, link: {str_link}")
+        
+        versao_encontrada = self._extrair_versao_da_url(link_url)
+        if versao_encontrada:
+            validacao, msg = self._validar_versao_da_url(self.versao, versao_encontrada)
+            if not validacao:
+                return False, msg
 
-        return True
+        return (True, "Link aprovado")
 
 def verificar_https(url):
     url_analisada = urlparse(url)
@@ -172,7 +169,7 @@ def extrair_dados_da_pagina(pagina, url):
         )
 
     except TimeoutError as e:
-        logging.error(f"FALHA ESPECÍFICA: Timeout ao acessar {url}. {e}")
+        logging.error(f"Timeout ao acessar {url}. {e}")
         return "TimeoutError"
     except Error as e:
         logging.error(f"Ocorreu um erro de Playwright/Rede ao acessar {url}: {e}")
@@ -188,9 +185,9 @@ def baixar_conteudo(nome_colecao, nome_arquivo, conteudo_markdown):
         os.makedirs(caminho_colecao, exist_ok=True)
         with open(f"{caminho_colecao}/{nome_arquivo}.md", 'w', encoding="utf-8") as file:
             file.write(conteudo_markdown)
-            logging.info(f"Conteúdo da página salvo com sucesso. Caminho: {caminho_colecao}/{nome_arquivo}.md")
+            logging.info(f"Conteúdo da página salvo com sucesso. Arquivo: {nome_arquivo}.md")
     except (OSError, IOError, TypeError) as e:
-        logging.error(f"ERRO CRÍTICO ao salvar o arquivo {nome_arquivo}: {e}")
+        logging.error(f"Erro ao salvar o arquivo {nome_arquivo}: {e}")
 
 def main(nome_colecao, url, versao):
     logging.info("Iniciando o processo...")
@@ -264,7 +261,7 @@ def main(nome_colecao, url, versao):
             )
             logging.info(f"conteúdo salvo em {nome_arquivo}")
 
-            logging.info(f"Processando{len(dados_pagina_atual.links)} novos links")
+            logging.info(f"Processando {len(dados_pagina_atual.links)} novos links")
             for link in dados_pagina_atual.links:
                 if not link:
                     continue
@@ -274,14 +271,20 @@ def main(nome_colecao, url, versao):
                 parsed_url = urlparse(url_absoluta)
                 url_limpa = parsed_url.scheme + "://" + parsed_url.netloc + parsed_url.path
 
-                if url_limpa in urls_vistas or url_limpa in urls_para_acessar:
+                if url_limpa in urls_vistas or url_limpa in urls_para_acessar or url_limpa in urls_rejeitadas:
                     continue
+                
+                validar_novo_link = validador.validar_link_novo(
+                    url_base=url_atual, 
+                    link_url=url_limpa, 
+                    dominios_permitidos=dominios_permitidos
+                )
 
-                if validador.validar_link_novo(url_atual, url_limpa, dominios_permitidos):
+                if validar_novo_link[0]:
                     logging.info(f"Link APROVADO para a fila: {url_limpa}")
                     urls_para_acessar.append(url_limpa)
                 else:
-                    logging.error(f"Link REJEITADO: {url_limpa}")
+                    logging.error(f"Link REJEITADO: {url_limpa}, motivo: {validar_novo_link[1]}")
                     urls_rejeitadas.append(url_limpa)
 
     return {"urls_vistas": urls_vistas, "urls_para_acessar": urls_para_acessar, "urls_rejeitadas": urls_rejeitadas}

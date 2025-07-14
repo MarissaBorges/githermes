@@ -1,0 +1,26 @@
+`html` — HyperText Markup Language support
+==========================================
+
+**Source code:** [Lib/html/\_\_init\_\_.py](https://github.com/python/cpython/tree/3.13/Lib/html/__init__.py)
+
+---
+
+This module defines utilities to manipulate HTML.
+
+html.escape(*s*, *quote=True*)
+:   Convert the characters `&`, `<` and `>` in string *s* to HTML-safe
+    sequences. Use this if you need to display text that might contain such
+    characters in HTML. If the optional flag *quote* is true, the characters
+    (`"`) and (`'`) are also translated; this helps for inclusion in an HTML
+    attribute value delimited by quotes, as in `<a href="...">`.
+
+html.unescape(*s*)
+:   Convert all named and numeric character references (e.g. `&gt;`,
+    `&#62;`, `&#x3e;`) in the string *s* to the corresponding Unicode
+    characters. This function uses the rules defined by the HTML 5 standard
+    for both valid and invalid character references, and the [`list of
+    HTML 5 named character references`](html.entities.html#html.entities.html5 "html.entities.html5").
+
+---
+
+Submodules in the `html` package are:

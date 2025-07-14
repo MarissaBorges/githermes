@@ -13,6 +13,7 @@ from typing import Optional
 from dataclasses import dataclass
 import re
 from packaging import version
+import logging
 
 load_dotenv(find_dotenv())
 @dataclass
@@ -25,7 +26,7 @@ class DadosPagina:
 class Validador:
     def __init__(self, config, versao):
         self.extensoes_invalidas = config.get("extensoes_invalidas", [])
-        self.segmentos_invalidos = config.get("segmentos_de_caminho_invalido", [])
+        self.segmentos_invalidos = config.get("segmentos_de_caminho_invalidos", [])
         self.protocolos_invalidos = config.get("protocolos_invalidos", [])
         self.prefixos_permitidos = config.get("prefixos_de_caminho_permitidos", [])
         self.dominios_permitidos = config.get("dominios_permitidos", [])
@@ -42,29 +43,29 @@ class Validador:
         try:
             v_desejada = version.parse(versao_solicitada)
         except version.InvalidVersion:
-            return False, f"Versão desejada '{versao_solicitada}' é inválida."
+            return (False, f"Versão desejada '{versao_solicitada}' é inválida.")
 
         if versao_encontrada is None:
-            return True, "Versão não encontrada na URL, permitido."
+            return (True, "Versão não encontrada na URL, permitido.")
 
         try:
             v_encontrada = version.parse(versao_encontrada)
         except version.InvalidVersion:
-            return False, f"Versão encontrada na URL '{versao_encontrada}' é inválida."
+            return (False, f"Versão encontrada na URL '{versao_encontrada}' é inválida.")
 
         if v_encontrada.major != v_desejada.major:
-            return False, f"Major version incorreta. Desejada: {v_desejada.major}, Encontrada: {v_encontrada.major}"
+            return (False, f"Major version incorreta. Desejada: {v_desejada.major}, Encontrada: {v_encontrada.major}")
 
         if v_encontrada.release == (v_encontrada.major,):
-            return True, f"Versão genérica '{v_encontrada}' permitida."
+            return (True, f"Versão genérica '{v_encontrada}' permitida.")
 
         if v_encontrada < v_desejada:
-            return False, f"Versão encontrada '{v_encontrada}' é menor que a desejada '{v_desejada}'."
+            return (False, f"Versão encontrada '{v_encontrada}' é menor que a desejada '{v_desejada}'.")
         
         if v_encontrada > v_desejada:
-            return False, f"Versão encontrada '{v_encontrada}' é maior que a desejada '{v_desejada}'."
+            return (False, f"Versão encontrada '{v_encontrada}' é maior que a desejada '{v_desejada}'.")
 
-        return True, f"Versão '{v_encontrada}' compatível."
+        return (True, f"Versão '{v_encontrada}' compatível.")
 
     def validar_pagina(self, dados: DadosPagina) -> tuple[bool, str]:
         if any(dados.url_original.endswith(extensao) for extensao in self.extensoes_invalidas):
@@ -110,11 +111,11 @@ class Validador:
 
         if dominio_principal in self.dominios_permitidos:
             dominios_permitidos = self.dominios_permitidos[dominio_principal]
-            print(f"INFO: Usando escopo amplo para a vizinhança conhecida: {dominio_principal}")
+            logging.info(f"INFO: Usando escopo amplo para a vizinhança conhecida: {dominio_principal}")
         else:
             dominio_exato = parsed_link.hostname
             dominios_permitidos.append(dominio_exato)
-            print(f"INFO: Usando escopo restrito para o domínio: {dominio_exato}")
+            logging.info(f"INFO: Usando escopo restrito para o domínio: {dominio_exato}")
 
         if dominio_do_link not in dominios_permitidos:
             return False
@@ -133,7 +134,7 @@ class Validador:
 def verificar_https(url):
     url_analisada = urlparse(url)
     if not url_analisada.scheme:
-        print(f"URL '{url}' não tem esquema. Adicionando 'https://' como padrão.")
+        logging.info(f"URL '{url}' não tem esquema. Adicionando 'https://' como padrão.")
         str_link = 'https://' + url
         return str_link
     return url
@@ -147,9 +148,9 @@ def carregar_config_urls(caminho_do_arquivo="config_urls.json"):
         with open(caminho_do_arquivo, 'r', encoding='utf-8') as f:
             return json.load(f)
     except FileNotFoundError:
-        print(f"ERRO: Arquivo de configuração '{caminho_do_arquivo}' não encontrado.")
+        logging.error(f"ERRO: Arquivo de configuração '{caminho_do_arquivo}' não encontrado.")
     except json.JSONDecodeError:
-        print(f"ERRO: O arquivo '{caminho_do_arquivo}' tem um erro de sintaxe JSON.")
+        logging.error(f"ERRO: O arquivo '{caminho_do_arquivo}' tem um erro de sintaxe JSON.")
     return {}
 
 def extrair_dominio_principal(url_completa):
@@ -161,7 +162,7 @@ def extrair_dados_da_pagina(pagina, url):
         pagina.goto(url, wait_until="domcontentloaded", timeout=15000)
         conteudo_html = pagina.content()
         soup = BeautifulSoup(conteudo_html, 'lxml')
-        print("conteúdo da página extraído")
+        logging.info("conteúdo da página extraído")
 
         documento = Document(conteudo_html)
         conteudo = documento.summary
@@ -174,7 +175,7 @@ def extrair_dados_da_pagina(pagina, url):
             if isinstance(elemento, Tag):
                 links.append(elemento.get("href"))
 
-        print("convertendo o conteúdo em markdown")
+        logging.info("convertendo o conteúdo em markdown")
         return DadosPagina(
             url_original=url,
             conteudo_markdown=conteudo_markdown,
@@ -183,30 +184,30 @@ def extrair_dados_da_pagina(pagina, url):
         )
 
     except TimeoutError as e:
-        print(f"FALHA ESPECÍFICA: Timeout ao acessar {url}. {e}")
+        logging.error(f"FALHA ESPECÍFICA: Timeout ao acessar {url}. {e}")
         return "TimeoutError"
     except Error as e:
-        print(f"Ocorreu um erro de Playwright/Rede ao acessar {url}: {e}")
+        logging.error(f"Ocorreu um erro de Playwright/Rede ao acessar {url}: {e}")
         return None
     except Exception as e:
-        print(f"Ocorreu um erro ao acessar a página: {e}")
+        logging.error(f"Ocorreu um erro ao acessar a página: {e}")
         return None
 
 def baixar_conteudo(nome_colecao, nome_arquivo, conteudo_markdown):
     try:
         caminho_colecao = f"data/collections/{nome_colecao}"
-        print(f"Baixando conteúdo no caminho: {caminho_colecao}")
+        logging.info(f"Baixando conteúdo no caminho: {caminho_colecao}")
         os.makedirs(caminho_colecao, exist_ok=True)
         with open(f"{caminho_colecao}/{nome_arquivo}.md", 'w', encoding="utf-8") as file:
             file.write(conteudo_markdown)
-            print(f"Conteúdo da página salvo com sucesso. Caminho: {caminho_colecao}/{nome_arquivo}.md\n\n")
+            logging.info(f"Conteúdo da página salvo com sucesso. Caminho: {caminho_colecao}/{nome_arquivo}.md")
     except (OSError, IOError, TypeError) as e:
-        print(f"ERRO CRÍTICO ao salvar o arquivo {nome_arquivo}: {e}")
+        logging.error(f"ERRO CRÍTICO ao salvar o arquivo {nome_arquivo}: {e}")
 
 def main(nome_colecao, url, versao):
-    print("Iniciando o processo...")
+    logging.info("Iniciando o processo...")
     url = verificar_https(url)
-    print(url)
+    logging.info(url)
     config = carregar_config_urls()
     validador = Validador(config, versao)
 
@@ -220,7 +221,7 @@ def main(nome_colecao, url, versao):
     with sync_playwright() as pw:
         navegador = pw.chromium.launch(headless=True)
         pagina = navegador.new_page()
-        print("pagina criada")
+        logging.info("pagina criada")
 
         while urls_para_acessar:
             url_atual = urls_para_acessar.pop(0)
@@ -228,23 +229,23 @@ def main(nome_colecao, url, versao):
             if url_atual in urls_vistas:
                 continue
 
-            print(f"\n\nVerificando a url: {url_atual}")
+            logging.info(f"Verificando a url: {url_atual}")
 
             urls_vistas.append(url_atual)
 
             dados_pagina_atual = extrair_dados_da_pagina(pagina, url_atual)
 
             if not dados_pagina_atual:
-                print("A página não possui dados ou não foi carregada")
+                logging.error("A página não possui dados ou não foi carregada")
                 continue
 
             valido, motivo = validador.validar_pagina(dados_pagina_atual)
 
             if not valido:
-                print(f"A página {url_atual} é inválida pelo motivo: {motivo}")
+                logging.info(f"A página {url_atual} é inválida pelo motivo: {motivo}")
                 continue
 
-            print("\n\nPágina aprovada!! Salvando conteúdo")
+            logging.info("Página aprovada!! Salvando conteúdo")
 
             parser = urlparse(url_atual)
             dominio = parser.hostname
@@ -260,7 +261,7 @@ def main(nome_colecao, url, versao):
             nome_colecao=nome_colecao,
             conteudo_markdown=conteudo_markdown
             )
-            print(f"\nconteúdo salvo em {nome_arquivo}")
+            logging.info(f"conteúdo salvo em {nome_arquivo}")
 
             for link in dados_pagina_atual.links:
                 url_absoluta = verificar_url_absoluto(url_atual, link)
@@ -276,13 +277,21 @@ def main(nome_colecao, url, versao):
     return {"urls_vistas": urls_vistas, "urls_para_acessar": urls_para_acessar, "urls_rejeitadas": urls_rejeitadas}
 
 if __name__ == "__main__":
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(levelname)s - %(message)s',
+        handlers=[
+            logging.FileHandler("crawler_log.log", mode='w'),
+            logging.StreamHandler()
+        ]
+    )
     tempo_inicio = time()
 
-    pprint(main(
+    logging.info(main(
     nome_colecao="python_docs",
     url="https://docs.python.org/3/index.html",
     versao="3.11"
     ))
 
     tempo_execucao = time() - tempo_inicio
-    print(f"O programa levou {tempo_execucao:.2f} segundos para executar")
+    logging.info(f"O programa levou {tempo_execucao:.2f} segundos para executar")

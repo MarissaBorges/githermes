@@ -1,0 +1,16 @@
+Copy
+
+```
+>>> import shlex
+>>> text = "a && b; c && d || e; f >'abc'; (def \"ghi\")"
+>>> s = shlex.shlex(text, posix=True)
+>>> s.whitespace_split = True
+>>> list(s)
+['a', '&&', 'b;', 'c', '&&', 'd', '||', 'e;', 'f', '>abc;', '(def', 'ghi)']
+>>> s = shlex.shlex(text, posix=True, punctuation_chars=True)
+>>> s.whitespace_split = True
+>>> list(s)
+['a', '&&', 'b', ';', 'c', '&&', 'd', '||', 'e', ';', 'f', '>', 'abc', ';',
+'(', 'def', 'ghi', ')']
+
+```

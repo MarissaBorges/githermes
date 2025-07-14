@@ -6,7 +6,7 @@ import os
 from pprint import pprint
 import json
 import tldextract
-from time import time
+from time import time, sleep
 from dotenv import load_dotenv, find_dotenv
 from readability import Document
 from typing import Optional
@@ -28,7 +28,8 @@ class Validador:
         self.extensoes_invalidas = config.get("extensoes_invalidas", [])
         self.segmentos_invalidos = config.get("segmentos_de_caminho_invalidos", [])
         self.protocolos_invalidos = config.get("protocolos_invalidos", [])
-        self.prefixos_permitidos = config.get("prefixos_de_caminho_permitidos", [])
+        self.prefixos_permitidos = config.get("prefixos_permitidos", [])
+        self.caminhos_raiz_permitidos = config.get("caminhos_raiz_permitidos", [])
         self.versao = versao
 
     def _extrair_versao_da_url(self, url: str) -> Optional[str]:
@@ -67,9 +68,8 @@ class Validador:
         url = dados.url_original
         pagina_de_indice = url.endswith("/") or url.endswith("index.html")
 
-        if not pagina_de_indice:
-            if len(dados.conteudo_markdown) < 150:
-                return (False, "Conteúdo muito curto")
+        if not pagina_de_indice and len(dados.conteudo_markdown) < 200:
+            return (False, "Conteúdo muito curto")
         
         titulo_lower = dados.titulo_pagina.lower()
         if '404' in titulo_lower or 'not found' in titulo_lower or 'página não encontrada' in titulo_lower or 'error' in titulo_lower:
@@ -83,27 +83,36 @@ class Validador:
         return (True, "Página válida")
 
     def validar_link_novo(self, url_base: str, link_url: str, dominios_permitidos: list) -> tuple[bool, str]:
-        url_parsed = urlparse(url_base)
-        str_url = url_parsed.scheme + "://" + url_parsed.netloc + url_parsed.path
-
-        link_completo = urljoin(str_url, link_url)
+        link_completo = urljoin(url_base, link_url)
         parsed_link = urlparse(link_completo)
-        str_link = parsed_link.scheme + "://" + url_parsed.netloc + url_parsed.path
+        str_link = parsed_link.scheme + "://" + parsed_link.netloc + parsed_link.path
+
+        if any(str_link.startswith(protocolo) for protocolo in self.protocolos_invalidos):
+            return (False, f"Protocolo inválido, link: {str_link}")
 
         dominio_do_link = parsed_link.hostname
         if dominio_do_link not in dominios_permitidos[0]:
             return (False, f"Domínio inválido, domínio: {dominio_do_link}")
 
         caminho_do_link = (parsed_link.path or "/").lower()
-        if not any(prefixo in caminho_do_link for prefixo in self.prefixos_permitidos):
-            if caminho_do_link != f"/{self.versao}/" or not f"/{self.versao}/".startswith(caminho_do_link):
-                return (False, f"Prefixo inválido, caminho do link: {caminho_do_link}")
-            
+        if caminho_do_link == "/":
+            return (True, "Link aprovado (página inicial)")
+        logging.info(f"Caminho do link: {caminho_do_link}")
+
+        major_version = str(version.parse(self.versao).major)
+        prefixo_valido = any(
+        caminho_do_link.startswith(f"/{major_version}/{prefixo_base}/")
+        for prefixo_base in self.prefixos_permitidos
+        )
+        caminho_raiz_valido = any(
+            caminho_do_link.startswith(prefixo)
+            for prefixo in self.caminhos_raiz_permitidos
+        )
+        if not (prefixo_valido or caminho_raiz_valido):
+            return (False, f"Prefixo inválido, caminho do link: {caminho_do_link}")
+        
         if any(link_url.endswith(extensao) for extensao in self.extensoes_invalidas):
             return (False, "Extensão de arquivo invalida")
-
-        if any(str_link.startswith(protocolo) for protocolo in self.protocolos_invalidos):
-            return (False, f"Protocolo inválido, link: {str_link}")
 
         if any(item_invalido in caminho_do_link.lower() for item_invalido in self.segmentos_invalidos):
             return (False, f"Segmento inválido, link: {str_link}")
@@ -150,10 +159,10 @@ def extrair_dados_da_pagina(pagina, url):
         logging.info("conteúdo da página extraído")
 
         documento = Document(conteudo_html)
-        conteudo = documento.summary
+        html_limpo = documento.summary()
         titulo_pagina = documento.title()
 
-        conteudo_markdown = md(str(conteudo))
+        conteudo_markdown = md(str(html_limpo))
         links = []
 
         for elemento in soup.find_all('a', href=True):
@@ -237,10 +246,36 @@ def main(nome_colecao, url, versao):
                 logging.error("A página não possui dados ou não foi carregada")
                 continue
 
-            valido, motivo = validador.validar_pagina(dados_pagina_atual)
+            pagina_valida, pagina_motivo = validador.validar_pagina(dados_pagina_atual)
 
-            if not valido:
-                logging.info(f"A página {url_atual} é inválida pelo motivo: {motivo}")
+            logging.info(f"Processando {len(dados_pagina_atual.links)} novos links")
+            for link in dados_pagina_atual.links:
+                if not link:
+                    continue
+
+                url_absoluta = verificar_url_absoluto(url_atual, link)
+
+                parsed_url = urlparse(url_absoluta)
+                url_limpa = parsed_url.scheme + "://" + parsed_url.netloc + parsed_url.path
+
+                if url_limpa in urls_vistas or url_limpa in urls_para_acessar or url_limpa in urls_rejeitadas:
+                    continue
+                
+                link_valido, link_motivo = validador.validar_link_novo(
+                    url_base=url_atual, 
+                    link_url=url_limpa, 
+                    dominios_permitidos=dominios_permitidos
+                )
+
+                if link_valido:
+                    logging.info(f"Link APROVADO para a fila: {url_limpa}")
+                    urls_para_acessar.append(url_limpa)
+                else:
+                    logging.error(f"Link REJEITADO: {url_limpa}, motivo: {link_motivo}")
+                    urls_rejeitadas.append(url_limpa)
+
+            if not pagina_valida:
+                logging.info(f"A página {url_atual} é inválida pelo motivo: {pagina_motivo}")
                 continue
 
             logging.info("Página aprovada!! Salvando conteúdo")
@@ -261,32 +296,6 @@ def main(nome_colecao, url, versao):
             )
             logging.info(f"conteúdo salvo em {nome_arquivo}")
 
-            logging.info(f"Processando {len(dados_pagina_atual.links)} novos links")
-            for link in dados_pagina_atual.links:
-                if not link:
-                    continue
-
-                url_absoluta = verificar_url_absoluto(url_atual, link)
-
-                parsed_url = urlparse(url_absoluta)
-                url_limpa = parsed_url.scheme + "://" + parsed_url.netloc + parsed_url.path
-
-                if url_limpa in urls_vistas or url_limpa in urls_para_acessar or url_limpa in urls_rejeitadas:
-                    continue
-                
-                validar_novo_link = validador.validar_link_novo(
-                    url_base=url_atual, 
-                    link_url=url_limpa, 
-                    dominios_permitidos=dominios_permitidos
-                )
-
-                if validar_novo_link[0]:
-                    logging.info(f"Link APROVADO para a fila: {url_limpa}")
-                    urls_para_acessar.append(url_limpa)
-                else:
-                    logging.error(f"Link REJEITADO: {url_limpa}, motivo: {validar_novo_link[1]}")
-                    urls_rejeitadas.append(url_limpa)
-
     return {"urls_vistas": urls_vistas, "urls_para_acessar": urls_para_acessar, "urls_rejeitadas": urls_rejeitadas}
 
 if __name__ == "__main__":
@@ -302,7 +311,7 @@ if __name__ == "__main__":
 
     logging.info(main(
     nome_colecao="python_docs",
-    url="https://docs.python.org/3/index.html",
+    url="https://docs.python.org/3/library/pathlib.html",
     versao="3.11"
     ))
 

@@ -95,7 +95,7 @@ class Validador:
 
         return (True, "Página válida")
 
-    def validar_link_novo(self, url_base: str, link_url: str) -> bool:
+    def validar_link_novo(self, url_base: str, link_url: str, dominios_permitidos: list) -> bool:
         url_parsed = urlparse(url_base)
         str_url = url_parsed.scheme + "://" + url_parsed.netloc + url_parsed.path
 
@@ -103,23 +103,11 @@ class Validador:
         parsed_link = urlparse(link_completo)
         str_link = parsed_link.scheme + "://" + url_parsed.netloc + url_parsed.path
 
-        dominio_principal = extrair_dominio_principal(str_link)
         dominio_do_link = parsed_link.hostname
-        caminho_do_link = (parsed_link.path or "/").lower()
-
-        dominios_permitidos = []
-
-        if dominio_principal in self.dominios_permitidos:
-            dominios_permitidos = self.dominios_permitidos[dominio_principal]
-            logging.info(f"INFO: Usando escopo amplo para a vizinhança conhecida: {dominio_principal}")
-        else:
-            dominio_exato = parsed_link.hostname
-            dominios_permitidos.append(dominio_exato)
-            logging.info(f"INFO: Usando escopo restrito para o domínio: {dominio_exato}")
-
         if dominio_do_link not in dominios_permitidos:
             return False
 
+        caminho_do_link = (parsed_link.path or "/").lower()
         if not any(caminho_do_link.startswith(prefixo) for prefixo in self.prefixos_permitidos):
             return False
 
@@ -223,6 +211,19 @@ def main(nome_colecao, url, versao):
         pagina = navegador.new_page()
         logging.info("pagina criada")
 
+        dominio_principal_atual = extrair_dominio_principal(url)
+        dominios_permitidos = []
+
+        dominios_conhecidos_json = config.get("dominios_permitidos", [])
+
+        if dominio_principal_atual in dominios_conhecidos_json:
+            dominios_permitidos.append(dominios_conhecidos_json[dominio_principal_atual])
+            logging.info(f"Escopo amplo ativado para a dominios conhecidos: {dominios_permitidos}")
+        else:
+            dominio_inicial = urlparse(url).hostname
+            dominios_permitidos.append(dominio_inicial)
+            logging.info(f"Escopo restrito para o domínio: {dominios_permitidos}")
+
         while urls_para_acessar:
             url_atual = urls_para_acessar.pop(0)
 
@@ -263,15 +264,24 @@ def main(nome_colecao, url, versao):
             )
             logging.info(f"conteúdo salvo em {nome_arquivo}")
 
+            logging.info(f"Processando{len(dados_pagina_atual.links)} novos links")
             for link in dados_pagina_atual.links:
+                if not link:
+                    continue
+
                 url_absoluta = verificar_url_absoluto(url_atual, link)
+
                 parsed_url = urlparse(url_absoluta)
                 url_limpa = parsed_url.scheme + "://" + parsed_url.netloc + parsed_url.path
+
                 if url_limpa in urls_vistas or url_limpa in urls_para_acessar:
                     continue
-                if verificar_url_absoluto(url_atual, link):
+
+                if validador.validar_link_novo(url_atual, url_limpa, dominios_permitidos):
+                    logging.info(f"Link APROVADO para a fila: {url_limpa}")
                     urls_para_acessar.append(url_limpa)
                 else:
+                    logging.error(f"Link REJEITADO: {url_limpa}")
                     urls_rejeitadas.append(url_limpa)
 
     return {"urls_vistas": urls_vistas, "urls_para_acessar": urls_para_acessar, "urls_rejeitadas": urls_rejeitadas}

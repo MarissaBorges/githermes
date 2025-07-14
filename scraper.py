@@ -9,7 +9,10 @@ import tldextract
 from time import time
 from dotenv import load_dotenv, find_dotenv
 from readability import Document
+from typing import Optional
 from dataclasses import dataclass
+import re
+from packaging import version
 
 load_dotenv(find_dotenv())
 @dataclass
@@ -20,12 +23,49 @@ class DadosPagina:
     titulo_pagina: str
 
 class Validador:
-    def __init__(self, config):
+    def __init__(self, config, versao):
         self.extensoes_invalidas = config.get("extensoes_invalidas", [])
         self.segmentos_invalidos = config.get("segmentos_de_caminho_invalido", [])
         self.protocolos_invalidos = config.get("protocolos_invalidos", [])
         self.prefixos_permitidos = config.get("prefixos_de_caminho_permitidos", [])
         self.dominios_permitidos = config.get("dominios_permitidos", [])
+        self.versao = versao
+
+    def _extrair_versao_da_url(self, url: str) -> Optional[str]:
+        padrao = r'/(?:v|version/)?(\d+(?:\.\d+)?)/'
+        match = re.search(padrao, url)
+        if match:
+            return match.group(1)
+        return None
+    
+    def _validar_versao_da_url(self, versao_solicitada: str, versao_encontrada: str):
+        try:
+            v_desejada = version.parse(versao_solicitada)
+        except version.InvalidVersion:
+            return False, f"Versão desejada '{versao_solicitada}' é inválida."
+
+        if versao_encontrada is None:
+            return True, "Versão não encontrada na URL, permitido."
+
+        try:
+            v_encontrada = version.parse(versao_encontrada)
+        except version.InvalidVersion:
+            return False, f"Versão encontrada na URL '{versao_encontrada}' é inválida."
+
+        if v_encontrada.major != v_desejada.major:
+            return False, f"Major version incorreta. Desejada: {v_desejada.major}, Encontrada: {v_encontrada.major}"
+
+        if v_encontrada.release == (v_encontrada.major,):
+            return True, f"Versão genérica '{v_encontrada}' permitida."
+
+        if v_encontrada < v_desejada:
+            return False, f"Versão encontrada '{v_encontrada}' é menor que a desejada '{v_desejada}'."
+        
+        if v_encontrada > v_desejada:
+            return False, f"Versão encontrada '{v_encontrada}' é maior que a desejada '{v_desejada}'."
+
+        return True, f"Versão '{v_encontrada}' compatível."
+
     def validar_pagina(self, dados: DadosPagina) -> tuple[bool, str]:
         if any(dados.url_original.endswith(extensao) for extensao in self.extensoes_invalidas):
             return (False, "Extensão de arquivo invalida")
@@ -46,9 +86,14 @@ class Validador:
         if any(palavra in conteudo_lower for palavra in palavras_invalidas):
             return (False, "Página inválida, foi encontrada uma palavra inválida")
         
+        versao_encontrada = self._extrair_versao_da_url(dados.url_original)
+        if versao_encontrada:
+            validacao, msg = self._validar_versao_da_url(self.versao, versao_encontrada)
+            if not validacao:
+                return False, msg
+
         return (True, "Página válida")
 
-        # Extrair a versão da url ou do título da página
     def validar_link_novo(self, url_base: str, link_url: str) -> bool:
         url_parsed = urlparse(url_base)
         str_url = url_parsed.scheme + "://" + url_parsed.netloc + url_parsed.path
@@ -158,12 +203,12 @@ def baixar_conteudo(nome_colecao, nome_arquivo, conteudo_markdown):
     except (OSError, IOError, TypeError) as e:
         print(f"ERRO CRÍTICO ao salvar o arquivo {nome_arquivo}: {e}")
 
-def main(nome_colecao, url):
+def main(nome_colecao, url, versao):
     print("Iniciando o processo...")
     url = verificar_https(url)
     print(url)
     config = carregar_config_urls()
-    validador = Validador(config)
+    validador = Validador(config, versao)
 
     urls_vistas = []
     urls_para_acessar = []
@@ -236,6 +281,7 @@ if __name__ == "__main__":
     pprint(main(
     nome_colecao="python_docs",
     url="https://docs.python.org/3/index.html",
+    versao="3.11"
     ))
 
     tempo_execucao = time() - tempo_inicio

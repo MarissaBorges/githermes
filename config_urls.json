@@ -5,7 +5,8 @@
       "docs.python.org",
       "wiki.python.org",
       "devguide.python.org",
-      "pypi.org"
+      "pypi.org",
+      "peps.python.org"
     ],
     "react.dev": ["react.dev", "legacy.reactjs.org"],
     "vuejs.org": ["vuejs.org", "v2.vuejs.org", "router.vuejs.org"]
@@ -20,7 +21,11 @@
     "manual",
     "man",
     "dev",
-    "help"
+    "help",
+    "get-started",
+    "develop",
+    "deploy",
+    "knowledge-base"
   ],
   "prefixos_permitidos": [
     "tutorial",
@@ -138,6 +143,11 @@
     ".map"
   ],
   "segmentos_de_caminho_invalidos": [
+    "genindex",
+    "modindex",
+    "glossary",
+    "search",
+    "copyright",
     "ftp",
     "contrib",
     "login",

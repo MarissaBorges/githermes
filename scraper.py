@@ -134,8 +134,10 @@ class Validador:
         if not (prefixo_valido or caminho_raiz_valido):
             return (False, f"Prefixo inválido, caminho do link: {caminho_do_link}")
         
-        if any(link_url.endswith(extensao) for extensao in self.extensoes_invalidas):
-            return (False, "Extensão de arquivo invalida")
+        caminho_sem_barra = caminho_do_link.rstrip('/')
+        if '.' in caminho_sem_barra.split('/')[-1]:
+            if any(caminho_sem_barra.endswith(extensao) for extensao in self.extensoes_invalidas):
+                return (False, "Extensão de arquivo invalida")
 
         if any(item_invalido in caminho_do_link.lower() for item_invalido in self.segmentos_invalidos):
             return (False, f"Segmento inválido, link: {str_link}")
@@ -279,7 +281,7 @@ def baixar_conteudo(nome_colecao, nome_arquivo, conteudo_markdown):
     except (OSError, IOError, TypeError) as e:
         logging.error(f"Erro ao salvar o arquivo {nome_arquivo}: {e}")
 
-def main(nome_colecao, url, versao=None):
+def main(nome_colecao, url, versao=None, acessar_links_internos=True):
     logging.info("Iniciando o processo...")
 
     ua = UserAgent(browsers='Chrome', platforms='desktop')
@@ -321,49 +323,53 @@ def main(nome_colecao, url, versao=None):
                 if not dados_pagina_atual:
                     logging.error("A página não possui dados ou não foi carregada")
                     continue
+                
+                if acessar_links_internos:
+                    pagina_valida, pagina_motivo = validador.validar_pagina(dados_pagina_atual)
 
-                pagina_valida, pagina_motivo = validador.validar_pagina(dados_pagina_atual)
+                    logging.info(f"Processando {len(dados_pagina_atual.links)} novos links")
+                    for link in dados_pagina_atual.links:
+                        if not link:
+                            continue
 
-                logging.info(f"Processando {len(dados_pagina_atual.links)} novos links")
-                for link in dados_pagina_atual.links:
-                    if not link:
+                        url_absoluta = verificar_url_absoluto(url_atual, link)
+
+                        parsed_url = urlparse(url_absoluta)
+                        url_limpa = parsed_url.scheme + "://" + parsed_url.netloc + parsed_url.path
+
+                        if url_limpa.startswith('http://'):
+                            url_limpa = 'https' + url_limpa[4:]
+
+                        if url_limpa == 'https://':
+                            continue
+
+                        if url_limpa in urls_vistas or url_limpa in urls_para_acessar or url_limpa in urls_rejeitadas:
+                            continue
+                        
+                        link_valido, link_motivo = validador.validar_link_novo(
+                            url_base=url_atual, 
+                            link_url=url_limpa, 
+                        )
+
+                        if link_valido:
+                            logging.info(f"Link APROVADO para a fila: {url_limpa}")
+                            urls_para_acessar.append(url_limpa)
+                        else:
+                            logging.error(f"Link REJEITADO: {url_limpa}, motivo: {link_motivo}")
+                            urls_rejeitadas.append(url_limpa)
+
+                    if not pagina_valida:
+                        logging.info(f"A página {url_atual} é inválida pelo motivo: {pagina_motivo}")
                         continue
 
-                    url_absoluta = verificar_url_absoluto(url_atual, link)
-
-                    parsed_url = urlparse(url_absoluta)
-                    url_limpa = parsed_url.scheme + "://" + parsed_url.netloc + parsed_url.path
-
-                    if url_limpa.startswith('http://'):
-                        url_limpa = 'https' + url_limpa[4:]
-
-                    if url_limpa in urls_vistas or url_limpa in urls_para_acessar or url_limpa in urls_rejeitadas:
-                        continue
-                    
-                    link_valido, link_motivo = validador.validar_link_novo(
-                        url_base=url_atual, 
-                        link_url=url_limpa, 
-                    )
-
-                    if link_valido:
-                        logging.info(f"Link APROVADO para a fila: {url_limpa}")
-                        urls_para_acessar.append(url_limpa)
-                    else:
-                        logging.error(f"Link REJEITADO: {url_limpa}, motivo: {link_motivo}")
-                        urls_rejeitadas.append(url_limpa)
-
-                if not pagina_valida:
-                    logging.info(f"A página {url_atual} é inválida pelo motivo: {pagina_motivo}")
-                    continue
-
-                logging.info("Página aprovada!! Salvando conteúdo")
+                    logging.info("Página aprovada!! Salvando conteúdo")
 
                 parser = urlparse(url_atual)
                 dominio = parser.hostname
                 caminho = parser.path
 
                 dominio_e_caminho = dominio + caminho
-                
+                    
                 nome_arquivo = "".join(["_" if caracter in "/?:-" else caracter for caracter in dominio_e_caminho ])
                 conteudo_markdown = dados_pagina_atual.conteudo_markdown
 
@@ -392,7 +398,8 @@ if __name__ == "__main__":
     logging.info(main(
     nome_colecao="streamlit-docs",
     url="https://docs.streamlit.io/",
-    # versao=""
+    versao="",
+    acessar_links_internos = True
     ))
 
     tempo_execucao = time() - tempo_inicio

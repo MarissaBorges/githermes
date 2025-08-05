@@ -1,4 +1,4 @@
-from playwright.sync_api import sync_playwright, Error, TimeoutError
+from playwright.async_api import async_playwright, Error, TimeoutError
 from markdownify import markdownify as md
 from bs4 import BeautifulSoup, Tag
 from urllib.parse import urljoin, urlparse
@@ -15,6 +15,7 @@ from packaging import version
 import logging
 import httpx
 from fake_useragent import UserAgent
+import asyncio
 
 load_dotenv(find_dotenv())
 @dataclass
@@ -32,6 +33,7 @@ class Validador:
         self.prefixos_permitidos = config.get("prefixos_permitidos", [])
         self.dominios_permitidos = config.get("dominios_permitidos", [])
         self.caminhos_raiz_permitidos = config.get("caminhos_raiz_permitidos", [])
+        self.segmentos_de_url_valida = config.get("segmentos_de_url_valida", [])
         self.versao = versao
 
     def _extrair_versao_da_url(self, url: str) -> Optional[str]:
@@ -133,11 +135,18 @@ class Validador:
         if not (prefixo_valido or caminho_raiz_valido):
             return (False, f"Prefixo inválido, caminho do link: {caminho_do_link}")
         
+        logging.debug("--- DEPURAÇÃO DE EXTENSÃO ---")
+        logging.debug(f"A verificar o link: '{link_url}'")
+        logging.debug(f"Último segmento do caminho: '{caminho_do_link.rstrip('/').split('/')[-1]}'")
+        logging.debug(f"Contra a lista de extensões: {self.extensoes_invalidas}")
         caminho_sem_barra = caminho_do_link.rstrip('/')
         if '.' in caminho_sem_barra.split('/')[-1]:
             if any(caminho_sem_barra.endswith(extensao) for extensao in self.extensoes_invalidas):
                 return (False, "Extensão de arquivo invalida")
 
+        logging.debug("--- DEPURAÇÃO DE SEGMENTO ---")
+        logging.debug(f"A verificar o caminho: '{caminho_do_link}'")
+        logging.debug(f"Contra a lista de inválidos: {self.segmentos_invalidos}")
         if any(item_invalido in caminho_do_link.lower() for item_invalido in self.segmentos_invalidos):
             return (False, f"Segmento inválido, link: {str_link}")
         
@@ -150,47 +159,47 @@ class Validador:
 
         return (True, "Link aprovado")
 
-def validar_url_inicial(url, user_agent):
-    parsed_url = urlparse(url)
-    hostname  = parsed_url.hostname
-    path = parsed_url.path
+    async def validar_url_inicial(self, url, user_agent):
+        parsed_url = urlparse(url)
+        hostname  = parsed_url.hostname
+        path = parsed_url.path
 
-    segmentos_de_url_valida = ['docs', 'documentation', 'dev', 'developer', 'api', 'guide', 'help', 'support']
+        segmentos_de_url_valida = self.segmentos_de_url_valida
 
-    primeiro_segmento_host = hostname.split('.')[0]
-    if primeiro_segmento_host in segmentos_de_url_valida:
-        return (True, f"URL aprovada pelo subdomínio '{primeiro_segmento_host}'.")
-    
-    if path.startswith(tuple(f'/{sinal}/' for sinal in segmentos_de_url_valida)):
-        return (True, "URL aprovada pelo prefixo do caminho.")
-    
-    try:
-        html = fazer_request(url, user_agent)
-        soup = BeautifulSoup(html, 'lxml')
-    except Exception as e:
-        return (False, f"Não foi possível buscar a URL inicial para validação: {e}")
-
-    pontuacao = []
-    
-    titulo = soup.title.string.lower() if soup.title and soup.title.string else ''
-    if any(sinal in titulo for sinal in ['documentation', 'docs', 'api reference', 'developer guide', 'manual']):
-        pontuacao.append(True)
-
-    h1 = soup.h1.string.lower() if soup.h1 and soup.h1.string else ''
-    if any(sinal in h1 for sinal in ['documentation', 'api', 'guide']):
-        pontuacao.append(True)
-
-    if soup.find('pre'):
-        pontuacao.append(True)
+        primeiro_segmento_host = hostname.split('.')[0]
+        if primeiro_segmento_host in segmentos_de_url_valida:
+            return (True, f"URL aprovada pelo subdomínio '{primeiro_segmento_host}'.")
         
-    texto_pagina = soup.get_text().lower()
-    if not any(sinal in texto_pagina for sinal in ['carrinho de compras', 'fórum', 'blog', 'loja', 'preços']):
-        pontuacao.append(True)
+        if path.startswith(tuple(f'/{segmento}/' for segmento in segmentos_de_url_valida)):
+            return (True, "URL aprovada pelo prefixo do caminho.")
+        
+        try:
+            html = await fazer_request(url, user_agent)
+            soup = BeautifulSoup(html, 'lxml')
+        except Exception as e:
+            return (False, f"Não foi possível buscar a URL inicial para validação: {e}")
 
-    if pontuacao.count(True) >= 2:
-        return (True, f"URL aprovada pela análise de conteúdo")
-    else:
-        return (False, f"URL rejeitada. Não é uma documentação")
+        pontuacao = []
+        
+        titulo = soup.title.string.lower() if soup.title and soup.title.string else ''
+        if any(sinal in titulo for sinal in ['documentation', 'docs', 'api reference', 'developer guide', 'manual']):
+            pontuacao.append(True)
+
+        h1 = soup.h1.string.lower() if soup.h1 and soup.h1.string else ''
+        if any(sinal in h1 for sinal in ['documentation', 'api', 'guide']):
+            pontuacao.append(True)
+
+        if soup.find('pre'):
+            pontuacao.append(True)
+            
+        texto_pagina = soup.get_text().lower()
+        if not any(sinal in texto_pagina for sinal in ['carrinho de compras', 'fórum', 'blog', 'loja', 'preços']):
+            pontuacao.append(True)
+
+        if pontuacao.count(True) >= 2:
+            return (True, f"URL aprovada pela análise de conteúdo")
+        else:
+            return (False, f"URL rejeitada. Não é uma documentação")
 
 def verificar_protocolo_https(url):
     url_analisada = urlparse(url)
@@ -218,11 +227,11 @@ def extrair_dominio_principal(url_completa):
     partes_extraidas = tldextract.extract(url_completa)
     return partes_extraidas.top_domain_under_public_suffix
 
-def fazer_request(url, user_agent):
+async def fazer_request(url, user_agent):
     headers = {'User-Agent': user_agent}
 
-    with httpx.Client(headers=headers, follow_redirects=True) as client:
-        response = client.get(url, timeout=10.0)
+    async with httpx.AsyncClient(headers=headers, follow_redirects=True) as client:
+        response = await client.get(url, timeout=10.0)
     
     if response.status_code == 200 and 'text/html' in response.headers.get('content-type', ''):
         conteudo_html = response.text
@@ -231,22 +240,22 @@ def fazer_request(url, user_agent):
         raise ValueError("Resposta não-HTML ou com erro")
     return conteudo_html
 
-def obter_conteudo_html(url, pagina_playwright, user_agent):
-    try:
-        return fazer_request(url, user_agent)
-    except Exception as e:
-        logging.warning(f"Falha ao usar HTTPX para {url} ({e}). Usando Playwright.")
-        try:
-            pagina_playwright.goto(url, wait_until="domcontentloaded", timeout=15000)
-            return pagina_playwright.content()
-        except Exception as playwright_error:
-            logging.error(f"Falha do Playwright ao acessar {url}: {playwright_error}")
-            return None
+async def obter_varios_conteudos_html(urls, pagina_playwright, user_agent):
+    tasks = [fazer_request(url, user_agent) for url in urls]
+    resultados = list(await asyncio.gather(*tasks, return_exceptions=True))
+    for i, resultado in enumerate(resultados):
+        if isinstance(resultado, Exception) or not resultado:
+            try:
+                await pagina_playwright.goto(urls[i], wait_until="domcontentloaded", timeout=15000)
+                resultados[i] = await pagina_playwright.content()
+            except Exception as playwright_error:
+                logging.error(f"Falha do Playwright ao acessar {urls[i]}: {playwright_error}")
+                resultados[i] = Exception("Falha ao obter conteúdo com httpx e Playwright")
+    return resultados
 
 def converter_html_para_markdown(conteudo_html, url):
     if not conteudo_html:
         return None
-    
     soup = BeautifulSoup(conteudo_html, 'lxml')
     logging.info("conteúdo da página extraído")
 
@@ -280,19 +289,19 @@ def baixar_conteudo(nome_colecao, nome_arquivo, conteudo_markdown):
     except (OSError, IOError, TypeError) as e:
         logging.error(f"Erro ao salvar o arquivo {nome_arquivo}: {e}")
 
-def scraper_docs(nome_colecao, url, versao=None, acessar_links_internos=True):
+async def scraper_docs(nome_colecao, url, versao=None, acessar_links_internos=True, batch_size = 5):
     logging.info("Iniciando o processo...")
 
     ua = UserAgent(browsers='Chrome', platforms='desktop')
     user_agent = ua.random
 
-    url_valida = validar_url_inicial(url, user_agent)
-    if url_valida:
-        url = verificar_protocolo_https(url)
-        logging.info(url)
-        config = carregar_config_urls()
-        validador = Validador(config, versao)
+    url = verificar_protocolo_https(url)
+    logging.info(url)
+    config = carregar_config_urls()
+    validador = Validador(config, versao)
 
+    url_valida = await validador.validar_url_inicial(url, user_agent)
+    if url_valida:
         urls_vistas = []
         urls_para_acessar = []
         urls_rejeitadas = []
@@ -300,84 +309,88 @@ def scraper_docs(nome_colecao, url, versao=None, acessar_links_internos=True):
         if not url in urls_para_acessar:
             urls_para_acessar.append(url)
 
-        with sync_playwright() as pw:
-            navegador = pw.chromium.launch(headless=True)
-            pagina_playwright = navegador.new_page()
+        async with async_playwright() as pw:
+            navegador = await pw.chromium.launch(headless=True)
+            pagina_playwright = await navegador.new_page()
             logging.info("Playwright inicializado com sucesso")
 
             while urls_para_acessar:
-                url_atual = urls_para_acessar.pop(0)
+                batch = []
+                while urls_para_acessar and len(batch) < batch_size:
+                    url_atual = urls_para_acessar.pop(0)
+                    if url_atual in urls_vistas:
+                        continue
+                    batch.append(url_atual)
+                    urls_vistas.append(url_atual)
 
-                if url_atual in urls_vistas:
-                    continue
+                conteudos_html = await obter_varios_conteudos_html(batch, pagina_playwright=pagina_playwright, user_agent=user_agent)
 
-                logging.info(f"Verificando a url: {url_atual}")
-
-                urls_vistas.append(url_atual)
-
-                conteudo_html_atual = obter_conteudo_html(url_atual, pagina_playwright, user_agent)
-
-                dados_pagina_atual = converter_html_para_markdown(conteudo_html_atual, url_atual)
-
-                if not dados_pagina_atual:
-                    logging.error("A página não possui dados ou não foi carregada")
-                    continue
-                
-                if acessar_links_internos:
-                    pagina_valida, pagina_motivo = validador.validar_pagina_atual(dados_pagina_atual)
-
-                    logging.info(f"Processando {len(dados_pagina_atual.links)} novos links")
-                    for link in dados_pagina_atual.links:
-                        if not link:
-                            continue
-
-                        url_absoluta = verificar_url_completa(url_atual, link)
-
-                        parsed_url = urlparse(url_absoluta)
-                        url_limpa = parsed_url.scheme + "://" + parsed_url.netloc + parsed_url.path
-
-                        if url_limpa.startswith('http://'):
-                            url_limpa = 'https' + url_limpa[4:]
-
-                        if url_limpa == 'https://':
-                            continue
-
-                        if url_limpa in urls_vistas or url_limpa in urls_para_acessar or url_limpa in urls_rejeitadas:
-                            continue
-                        
-                        link_valido, link_motivo = validador.validar_link_novo(
-                            url_base=url_atual, 
-                            link_url=url_limpa, 
-                        )
-
-                        if link_valido:
-                            logging.info(f"Link APROVADO para a fila: {url_limpa}")
-                            urls_para_acessar.append(url_limpa)
-                        else:
-                            logging.error(f"Link REJEITADO: {url_limpa}, motivo: {link_motivo}")
-                            urls_rejeitadas.append(url_limpa)
-
-                    if not pagina_valida:
-                        logging.info(f"A página {url_atual} é inválida pelo motivo: {pagina_motivo}")
+                for url_atual, conteudo_html_atual in zip(batch, conteudos_html):
+                    if isinstance(conteudo_html_atual, Exception) or not conteudo_html_atual:
+                        logging.error(f"Erro ao obter {url_atual}: {conteudo_html_atual}")
                         continue
 
-                    logging.info("Página aprovada!! Salvando conteúdo")
+                    dados_pagina_atual = converter_html_para_markdown(conteudo_html_atual, url_atual)
 
-                parser = urlparse(url_atual)
-                dominio = parser.hostname
-                caminho = parser.path
+                    if not dados_pagina_atual:
+                        logging.error("A página não possui dados ou não foi carregada")
+                        continue
 
-                dominio_e_caminho = dominio + caminho
-                    
-                nome_arquivo = "".join(["_" if caracter in "/?:-" else caracter for caracter in dominio_e_caminho ])
-                conteudo_markdown = dados_pagina_atual.conteudo_markdown
+                    if acessar_links_internos:
+                        pagina_valida, pagina_motivo = validador.validar_pagina_atual(dados_pagina_atual)
 
-                baixar_conteudo(
-                nome_arquivo=nome_arquivo,
-                nome_colecao=nome_colecao,
-                conteudo_markdown=conteudo_markdown
-                )
-                logging.info(f"conteúdo salvo em {nome_arquivo}")
+                        logging.info(f"Processando {len(dados_pagina_atual.links)} novos links")
+                        for link in dados_pagina_atual.links:
+                            if not link:
+                                continue
+
+                            url_absoluta = verificar_url_completa(url_atual, link)
+
+                            parsed_url = urlparse(url_absoluta)
+                            url_limpa = parsed_url.scheme + "://" + parsed_url.netloc + parsed_url.path
+
+                            if url_limpa.startswith('http://'):
+                                url_limpa = 'https' + url_limpa[4:]
+
+                            if url_limpa == 'https://':
+                                continue
+
+                            if url_limpa in urls_vistas or url_limpa in urls_para_acessar or url_limpa in urls_rejeitadas:
+                                continue
+
+                            link_valido, link_motivo = validador.validar_link_novo(
+                                url_base=url_atual,
+                                link_url=url_limpa,
+                            )
+
+                            if link_valido:
+                                logging.info(f"Link APROVADO para a fila: {url_limpa}")
+                                urls_para_acessar.append(url_limpa)
+                            else:
+                                logging.error(f"Link REJEITADO: {url_limpa}, motivo: {link_motivo}")
+                                urls_rejeitadas.append(url_limpa)
+
+                        if not pagina_valida:
+                            logging.info(f"A página {url_atual} é inválida pelo motivo: {pagina_motivo}")
+                            continue
+
+                        logging.info("Página aprovada!! Salvando conteúdo")
+
+                    parser = urlparse(url_atual)
+                    dominio = parser.hostname
+                    caminho = parser.path
+
+                    dominio_e_caminho = dominio + caminho
+
+                    nome_arquivo = "".join(["_" if caracter in "/?:-" else caracter for caracter in dominio_e_caminho ])
+                    conteudo_markdown = dados_pagina_atual.conteudo_markdown
+
+                    baixar_conteudo(
+                        nome_arquivo=nome_arquivo,
+                        nome_colecao=nome_colecao,
+                        conteudo_markdown=conteudo_markdown
+                    )
+                    logging.info(f"conteúdo salvo em {nome_arquivo}")
 
         return {"urls_vistas": urls_vistas, "urls_para_acessar": urls_para_acessar, "urls_rejeitadas": urls_rejeitadas}
     
@@ -389,17 +402,23 @@ if __name__ == "__main__":
         format='%(asctime)s - %(levelname)s - %(message)s',
         handlers=[
             logging.FileHandler("crawler_log.log", mode='w'),
-            logging.StreamHandler()
-        ]
+            # logging.StreamHandler()
+        ],
+        encoding='utf-8'
     )
     tempo_inicio = time()
 
-    logging.info(scraper_docs(
+    resultado = asyncio.run(scraper_docs(
     nome_colecao="streamlit-docs",
     url="https://docs.streamlit.io/",
     versao="",
-    acessar_links_internos = True
+    acessar_links_internos = True,
+    batch_size=10
     ))
+
+    logging.info(resultado)
 
     tempo_execucao = time() - tempo_inicio
     logging.info(f"O programa levou {tempo_execucao:.2f} segundos para executar")
+    print("programa finalizado")
+    print(f"O programa levou {tempo_execucao:.2f} segundos para executar")

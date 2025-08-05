@@ -3,10 +3,9 @@ from markdownify import markdownify as md
 from bs4 import BeautifulSoup, Tag
 from urllib.parse import urljoin, urlparse
 import os
-from pprint import pprint
 import json
 import tldextract
-from time import time, sleep
+from time import time
 from dotenv import load_dotenv, find_dotenv
 from readability import Document
 from typing import Optional
@@ -83,7 +82,7 @@ class Validador:
 
         return (True, f"Versão '{v_encontrada}' compatível.")
 
-    def validar_pagina(self, dados: DadosPagina) -> tuple[bool, str]:
+    def validar_pagina_atual(self, dados: DadosPagina) -> tuple[bool, str]:
         url = dados.url_original
         pagina_de_indice = url.endswith("/") or url.endswith("index.html") or url.endswith("contents.html")
 
@@ -193,7 +192,7 @@ def validar_url_inicial(url, user_agent):
     else:
         return (False, f"URL rejeitada. Não é uma documentação")
 
-def verificar_https(url):
+def verificar_protocolo_https(url):
     url_analisada = urlparse(url)
     if not url_analisada.scheme:
         logging.info(f"URL '{url}' não tem esquema. Adicionando 'https://' como padrão.")
@@ -201,7 +200,7 @@ def verificar_https(url):
         return str_link
     return url
 
-def verificar_url_absoluto(url_base, url):
+def verificar_url_completa(url_base, url):
     url_absoluta = urljoin(url_base, url)
     return url_absoluta
 
@@ -281,7 +280,7 @@ def baixar_conteudo(nome_colecao, nome_arquivo, conteudo_markdown):
     except (OSError, IOError, TypeError) as e:
         logging.error(f"Erro ao salvar o arquivo {nome_arquivo}: {e}")
 
-def main(nome_colecao, url, versao=None, acessar_links_internos=True):
+def scraper_docs(nome_colecao, url, versao=None, acessar_links_internos=True):
     logging.info("Iniciando o processo...")
 
     ua = UserAgent(browsers='Chrome', platforms='desktop')
@@ -289,7 +288,7 @@ def main(nome_colecao, url, versao=None, acessar_links_internos=True):
 
     url_valida = validar_url_inicial(url, user_agent)
     if url_valida:
-        url = verificar_https(url)
+        url = verificar_protocolo_https(url)
         logging.info(url)
         config = carregar_config_urls()
         validador = Validador(config, versao)
@@ -325,14 +324,14 @@ def main(nome_colecao, url, versao=None, acessar_links_internos=True):
                     continue
                 
                 if acessar_links_internos:
-                    pagina_valida, pagina_motivo = validador.validar_pagina(dados_pagina_atual)
+                    pagina_valida, pagina_motivo = validador.validar_pagina_atual(dados_pagina_atual)
 
                     logging.info(f"Processando {len(dados_pagina_atual.links)} novos links")
                     for link in dados_pagina_atual.links:
                         if not link:
                             continue
 
-                        url_absoluta = verificar_url_absoluto(url_atual, link)
+                        url_absoluta = verificar_url_completa(url_atual, link)
 
                         parsed_url = urlparse(url_absoluta)
                         url_limpa = parsed_url.scheme + "://" + parsed_url.netloc + parsed_url.path
@@ -395,7 +394,7 @@ if __name__ == "__main__":
     )
     tempo_inicio = time()
 
-    logging.info(main(
+    logging.info(scraper_docs(
     nome_colecao="streamlit-docs",
     url="https://docs.streamlit.io/",
     versao="",

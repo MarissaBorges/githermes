@@ -289,7 +289,7 @@ def baixar_conteudo(nome_colecao, nome_arquivo, conteudo_markdown):
     except (OSError, IOError, TypeError) as e:
         logging.error(f"Erro ao salvar o arquivo {nome_arquivo}: {e}")
 
-async def scraper_docs(nome_colecao, url, versao=None, acessar_links_internos=True, batch_size = 5):
+async def scraper_docs(nome_colecao, url, versao=None, acessar_links_internos=True, batch_size = 5, profundidade=200):
     logging.info("Iniciando o processo...")
 
     ua = UserAgent(browsers='Chrome', platforms='desktop')
@@ -305,6 +305,7 @@ async def scraper_docs(nome_colecao, url, versao=None, acessar_links_internos=Tr
         urls_vistas = []
         urls_para_acessar = []
         urls_rejeitadas = []
+        paginas_salvas_contador = 0
 
         if not url in urls_para_acessar:
             urls_para_acessar.append(url)
@@ -314,7 +315,7 @@ async def scraper_docs(nome_colecao, url, versao=None, acessar_links_internos=Tr
             pagina_playwright = await navegador.new_page()
             logging.info("Playwright inicializado com sucesso")
 
-            while urls_para_acessar:
+            while paginas_salvas_contador < profundidade and urls_para_acessar:
                 batch = []
                 while urls_para_acessar and len(batch) < batch_size:
                     url_atual = urls_para_acessar.pop(0)
@@ -323,9 +324,15 @@ async def scraper_docs(nome_colecao, url, versao=None, acessar_links_internos=Tr
                     batch.append(url_atual)
                     urls_vistas.append(url_atual)
 
+                if not batch:
+                    logging.info("Nenhuma URL válida para processar no batch. Encerrando.")
+                    break
+
                 conteudos_html = await obter_varios_conteudos_html(batch, pagina_playwright=pagina_playwright, user_agent=user_agent)
 
                 for url_atual, conteudo_html_atual in zip(batch, conteudos_html):
+                    if paginas_salvas_contador >= profundidade:
+                        break
                     if isinstance(conteudo_html_atual, Exception) or not conteudo_html_atual:
                         logging.error(f"Erro ao obter {url_atual}: {conteudo_html_atual}")
                         continue
@@ -342,6 +349,7 @@ async def scraper_docs(nome_colecao, url, versao=None, acessar_links_internos=Tr
                         logging.info(f"Processando {len(dados_pagina_atual.links)} novos links")
                         for link in dados_pagina_atual.links:
                             if not link:
+                                logging.info(f"Link vazio ignorado na página {url_atual}")
                                 continue
 
                             url_absoluta = verificar_url_completa(url_atual, link)
@@ -353,9 +361,11 @@ async def scraper_docs(nome_colecao, url, versao=None, acessar_links_internos=Tr
                                 url_limpa = 'https' + url_limpa[4:]
 
                             if url_limpa == 'https://':
+                                logging.info(f"Link ignorado: {url_limpa} (apenas esquema)")
                                 continue
 
                             if url_limpa in urls_vistas or url_limpa in urls_para_acessar or url_limpa in urls_rejeitadas:
+                                logging.info(f"Link já processado ou na fila: {url_limpa}")
                                 continue
 
                             link_valido, link_motivo = validador.validar_link_novo(
@@ -390,6 +400,7 @@ async def scraper_docs(nome_colecao, url, versao=None, acessar_links_internos=Tr
                         nome_colecao=nome_colecao,
                         conteudo_markdown=conteudo_markdown
                     )
+                    paginas_salvas_contador += 1
                     logging.info(f"conteúdo salvo em {nome_arquivo}")
 
         return {"urls_vistas": urls_vistas, "urls_para_acessar": urls_para_acessar, "urls_rejeitadas": urls_rejeitadas}
@@ -398,23 +409,25 @@ async def scraper_docs(nome_colecao, url, versao=None, acessar_links_internos=Tr
 
 if __name__ == "__main__":
     logging.basicConfig(
+        filename="crawler_log.log",
+        filemode="w",
         level=logging.INFO,
+        encoding="utf-8",
         format='%(asctime)s - %(levelname)s - %(message)s',
-        handlers=[
-            logging.FileHandler("crawler_log.log", mode='w'),
-            # logging.StreamHandler()
-        ],
-        encoding='utf-8'
     )
     tempo_inicio = time()
 
-    resultado = asyncio.run(scraper_docs(
-    nome_colecao="streamlit-docs",
-    url="https://docs.streamlit.io/",
-    versao="",
-    acessar_links_internos = True,
-    batch_size=10
-    ))
+    params = {
+        "nome_colecao": "streamlit-docs",
+        "url": "https://docs.streamlit.io/",
+        "versao": "",
+        "acessar_links_internos": True,
+        "batch_size": 10,
+        "profundidade": 12
+    }
+    logging.info(f"Iniciando o scraper com os seguintes parâmetros: {json.dumps(params, indent=4)}")
+
+    resultado = asyncio.run(scraper_docs(**params))
 
     logging.info(resultado)
 

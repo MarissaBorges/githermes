@@ -135,18 +135,11 @@ class Validador:
         if not (prefixo_valido or caminho_raiz_valido):
             return (False, f"Prefixo inválido, caminho do link: {caminho_do_link}")
         
-        logging.debug("--- DEPURAÇÃO DE EXTENSÃO ---")
-        logging.debug(f"A verificar o link: '{link_url}'")
-        logging.debug(f"Último segmento do caminho: '{caminho_do_link.rstrip('/').split('/')[-1]}'")
-        logging.debug(f"Contra a lista de extensões: {self.extensoes_invalidas}")
         caminho_sem_barra = caminho_do_link.rstrip('/')
         if '.' in caminho_sem_barra.split('/')[-1]:
             if any(caminho_sem_barra.endswith(extensao) for extensao in self.extensoes_invalidas):
                 return (False, "Extensão de arquivo invalida")
 
-        logging.debug("--- DEPURAÇÃO DE SEGMENTO ---")
-        logging.debug(f"A verificar o caminho: '{caminho_do_link}'")
-        logging.debug(f"Contra a lista de inválidos: {self.segmentos_invalidos}")
         if any(item_invalido in caminho_do_link.lower() for item_invalido in self.segmentos_invalidos):
             return (False, f"Segmento inválido, link: {str_link}")
         
@@ -201,6 +194,44 @@ class Validador:
         else:
             return (False, f"URL rejeitada. Não é uma documentação")
 
+class GerenciarJson():
+    def adicionar_no_json(self, nome_colecao, url, tipo_url):
+        caminho = f"data/collections/{nome_colecao}"
+        caminho_json = f"{caminho}/urls.json"
+        
+        os.makedirs(caminho, exist_ok=True)
+        
+        try:
+            if os.path.exists(caminho_json):
+                with open(caminho_json, "r", encoding="utf-8") as f:
+                    dados_json = json.load(f)
+            else:
+                dados_json = {}
+        except Exception as e:
+            print(f"Erro ao ler o arquivo JSON: {e}")
+            dados_json = {}
+        
+        if tipo_url not in dados_json:
+            dados_json[tipo_url] = []
+        
+        if url not in dados_json[tipo_url]:
+            dados_json[tipo_url].append(url)
+            try:
+                with open(caminho_json, "w", encoding="utf-8") as f:
+                    json.dump(dados_json, f, ensure_ascii=False, indent=2)
+            except Exception as e:
+                print(f"Erro ao salvar o arquivo JSON: {e}")
+
+    def carregar_json(self, caminho_do_arquivo="config_urls.json"):
+        try:
+            with open(caminho_do_arquivo, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except FileNotFoundError:
+            print(f"ERRO: Arquivo de configuração '{caminho_do_arquivo}' não encontrado.")
+        except json.JSONDecodeError:
+            print(f"ERRO: O arquivo '{caminho_do_arquivo}' tem um erro de sintaxe JSON.")
+        return {}
+
 def verificar_protocolo_https(url):
     url_analisada = urlparse(url)
     if not url_analisada.scheme:
@@ -212,16 +243,6 @@ def verificar_protocolo_https(url):
 def verificar_url_completa(url_base, url):
     url_absoluta = urljoin(url_base, url)
     return url_absoluta
-
-def carregar_config_urls(caminho_do_arquivo="config_urls.json"):
-    try:
-        with open(caminho_do_arquivo, 'r', encoding='utf-8') as f:
-            return json.load(f)
-    except FileNotFoundError:
-        logging.error(f"ERRO: Arquivo de configuração '{caminho_do_arquivo}' não encontrado.")
-    except json.JSONDecodeError:
-        logging.error(f"ERRO: O arquivo '{caminho_do_arquivo}' tem um erro de sintaxe JSON.")
-    return {}
 
 def extrair_dominio_principal(url_completa):
     partes_extraidas = tldextract.extract(url_completa)
@@ -297,11 +318,14 @@ async def scraper_docs(nome_colecao, url, versao=None, acessar_links_internos=Tr
 
     url = verificar_protocolo_https(url)
     logging.info(url)
-    config = carregar_config_urls()
+    gerenciar_json = GerenciarJson()
+    config = gerenciar_json.carregar_json("config_urls.json")
     validador = Validador(config, versao)
 
     url_valida = await validador.validar_url_inicial(url, user_agent)
     if url_valida:
+        json_urls_vistas = gerenciar_json.carregar_json(f"data/collections/{nome_colecao}/urls.json")
+        json_urls_vistas = json_urls_vistas.get("urls_vistas", [])
         urls_vistas = []
         urls_para_acessar = []
         urls_rejeitadas = []
@@ -309,6 +333,7 @@ async def scraper_docs(nome_colecao, url, versao=None, acessar_links_internos=Tr
 
         if not url in urls_para_acessar:
             urls_para_acessar.append(url)
+            gerenciar_json.adicionar_no_json(nome_colecao, url, "urls_vistas")
 
         async with async_playwright() as pw:
             navegador = await pw.chromium.launch(headless=True)
@@ -352,9 +377,7 @@ async def scraper_docs(nome_colecao, url, versao=None, acessar_links_internos=Tr
                                 logging.info(f"Link vazio ignorado na página {url_atual}")
                                 continue
 
-                            url_absoluta = verificar_url_completa(url_atual, link)
-
-                            parsed_url = urlparse(url_absoluta)
+                            parsed_url = urlparse(verificar_url_completa(url_atual, link))
                             url_limpa = parsed_url.scheme + "://" + parsed_url.netloc + parsed_url.path
 
                             if url_limpa.startswith('http://'):
@@ -364,7 +387,7 @@ async def scraper_docs(nome_colecao, url, versao=None, acessar_links_internos=Tr
                                 logging.info(f"Link ignorado: {url_limpa} (apenas esquema)")
                                 continue
 
-                            if url_limpa in urls_vistas or url_limpa in urls_para_acessar or url_limpa in urls_rejeitadas:
+                            if url_limpa in urls_vistas or url_limpa in urls_para_acessar or url_limpa in urls_rejeitadas or url_limpa in json_urls_vistas:
                                 logging.info(f"Link já processado ou na fila: {url_limpa}")
                                 continue
 
@@ -395,6 +418,7 @@ async def scraper_docs(nome_colecao, url, versao=None, acessar_links_internos=Tr
                     nome_arquivo = "".join(["_" if caracter in "/?:-" else caracter for caracter in dominio_e_caminho ])
                     conteudo_markdown = dados_pagina_atual.conteudo_markdown
 
+                    gerenciar_json.adicionar_no_json(nome_colecao, url_atual, "urls_vistas")
                     baixar_conteudo(
                         nome_arquivo=nome_arquivo,
                         nome_colecao=nome_colecao,
@@ -425,6 +449,7 @@ if __name__ == "__main__":
         "batch_size": 10,
         "profundidade": 12
     }
+    logging.info(f"Técnica de Gerenciamento de urls com json implementada")
     logging.info(f"Iniciando o scraper com os seguintes parâmetros: {json.dumps(params, indent=4)}")
 
     resultado = asyncio.run(scraper_docs(**params))

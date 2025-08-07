@@ -1,4 +1,4 @@
-from playwright.async_api import async_playwright, Error, TimeoutError
+from playwright.async_api import async_playwright
 from markdownify import markdownify as md
 from bs4 import BeautifulSoup, Tag
 from urllib.parse import urljoin, urlparse
@@ -208,7 +208,7 @@ class GerenciarJson():
             else:
                 dados_json = {}
         except Exception as e:
-            print(f"Erro ao ler o arquivo JSON: {e}")
+            logging.error(f"Erro ao ler o arquivo JSON: {e}")
             dados_json = {}
         
         if tipo_url not in dados_json:
@@ -220,16 +220,16 @@ class GerenciarJson():
                 with open(caminho_json, "w", encoding="utf-8") as f:
                     json.dump(dados_json, f, ensure_ascii=False, indent=2)
             except Exception as e:
-                print(f"Erro ao salvar o arquivo JSON: {e}")
+                logging.error(f"Erro ao salvar o arquivo JSON: {e}")
 
     def carregar_json(self, caminho_do_arquivo="config_urls.json"):
         try:
             with open(caminho_do_arquivo, 'r', encoding='utf-8') as f:
                 return json.load(f)
         except FileNotFoundError:
-            print(f"ERRO: Arquivo de configuração '{caminho_do_arquivo}' não encontrado.")
+            return {}            
         except json.JSONDecodeError:
-            print(f"ERRO: O arquivo '{caminho_do_arquivo}' tem um erro de sintaxe JSON.")
+            logging.error(f"ERRO: O arquivo '{caminho_do_arquivo}' tem um erro de sintaxe JSON.")
         return {}
 
 def verificar_protocolo_https(url):
@@ -250,16 +250,12 @@ def extrair_dominio_principal(url_completa):
 
 async def fazer_request(url, user_agent):
     headers = {'User-Agent': user_agent}
-
     async with httpx.AsyncClient(headers=headers, follow_redirects=True) as client:
         response = await client.get(url, timeout=10.0)
-    
     if response.status_code == 200 and 'text/html' in response.headers.get('content-type', ''):
-        conteudo_html = response.text
-        logging.info(f"Página {url} obtida usando httpx")
+        return response.text
     else:
         raise ValueError("Resposta não-HTML ou com erro")
-    return conteudo_html
 
 async def obter_varios_conteudos_html(urls, pagina_playwright, user_agent):
     tasks = [fazer_request(url, user_agent) for url in urls]
@@ -269,29 +265,22 @@ async def obter_varios_conteudos_html(urls, pagina_playwright, user_agent):
             try:
                 await pagina_playwright.goto(urls[i], wait_until="domcontentloaded", timeout=15000)
                 resultados[i] = await pagina_playwright.content()
-            except Exception as playwright_error:
-                logging.error(f"Falha do Playwright ao acessar {urls[i]}: {playwright_error}")
+            except Exception:
                 resultados[i] = Exception("Falha ao obter conteúdo com httpx e Playwright")
+                logging.error(f"Erro Playwright: {urls[i]}")
     return resultados
 
 def converter_html_para_markdown(conteudo_html, url):
-    if not conteudo_html:
-        return None
     soup = BeautifulSoup(conteudo_html, 'lxml')
-    logging.info("conteúdo da página extraído")
-
     documento = Document(conteudo_html)
     html_limpo = documento.summary()
     titulo_pagina = documento.title()
-
     conteudo_markdown = md(str(html_limpo))
     links = []
-
     for elemento in soup.find_all('a', href=True):
         if isinstance(elemento, Tag):
             links.append(elemento.get("href"))
 
-    logging.info("convertendo o conteúdo em markdown")
     return DadosPagina(
         url_original=url,
         conteudo_markdown=conteudo_markdown,
@@ -302,15 +291,14 @@ def converter_html_para_markdown(conteudo_html, url):
 def baixar_conteudo(nome_colecao, nome_arquivo, conteudo_markdown):
     try:
         caminho_colecao = f"data/collections/{nome_colecao}"
-        logging.info(f"Baixando conteúdo no caminho: {caminho_colecao}")
         os.makedirs(caminho_colecao, exist_ok=True)
         with open(f"{caminho_colecao}/{nome_arquivo}.md", 'w', encoding="utf-8") as file:
             file.write(conteudo_markdown)
-            logging.info(f"Conteúdo da página salvo com sucesso. Arquivo: {nome_arquivo}.md")
+        logging.info(f"Página salva: {nome_arquivo}")
     except (OSError, IOError, TypeError) as e:
         logging.error(f"Erro ao salvar o arquivo {nome_arquivo}: {e}")
 
-async def scraper_docs(nome_colecao, url, versao=None, acessar_links_internos=True, batch_size = 5, profundidade=200):
+async def main(nome_colecao, url, versao=None, acessar_links_internos=True, batch_size = 5, profundidade=200):
     logging.info("Iniciando o processo...")
 
     ua = UserAgent(browsers='Chrome', platforms='desktop')
@@ -431,6 +419,12 @@ async def scraper_docs(nome_colecao, url, versao=None, acessar_links_internos=Tr
     
     return "URL não parece ser de uma documentação"
 
+def scraper_docs(**params):
+    logging.info(f"Iniciando o scraper com os seguintes parâmetros: {json.dumps(params, indent=4)}")
+
+    resultado = asyncio.run(main(**params))
+    return resultado
+
 if __name__ == "__main__":
     logging.basicConfig(
         filename="crawler_log.log",
@@ -452,7 +446,7 @@ if __name__ == "__main__":
     logging.info(f"Técnica de Gerenciamento de urls com json implementada")
     logging.info(f"Iniciando o scraper com os seguintes parâmetros: {json.dumps(params, indent=4)}")
 
-    resultado = asyncio.run(scraper_docs(**params))
+    resultado = scraper_docs(**params)
 
     logging.info(resultado)
 

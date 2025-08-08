@@ -4,7 +4,6 @@ from bs4 import BeautifulSoup, Tag
 from urllib.parse import urljoin, urlparse
 import os
 import json
-import tldextract
 from time import time
 from dotenv import load_dotenv, find_dotenv
 from readability import Document

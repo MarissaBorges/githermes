@@ -1,16 +1,4 @@
 {
-  "dominios_permitidos": {
-    "python.org": [
-      "www.python.org",
-      "docs.python.org",
-      "wiki.python.org",
-      "devguide.python.org",
-      "pypi.org",
-      "peps.python.org"
-    ],
-    "react.dev": ["react.dev", "legacy.reactjs.org"],
-    "vuejs.org": ["vuejs.org", "v2.vuejs.org", "router.vuejs.org"]
-  },
   "segmentos_de_url_valida": [
     "docs",
     "documentation",
@@ -203,6 +191,7 @@
     "/partners",
     "/support",
     "/advertising",
+    "/peps",
     "/donate"
   ]
 }

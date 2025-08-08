@@ -31,10 +31,9 @@ class Validador:
         self.segmentos_invalidos = config.get("segmentos_de_caminho_invalidos", [])
         self.protocolos_invalidos = config.get("protocolos_invalidos", [])
         self.prefixos_permitidos = config.get("prefixos_permitidos", [])
-        self.dominios_permitidos = config.get("dominios_permitidos", [])
         self.caminhos_raiz_permitidos = config.get("caminhos_raiz_permitidos", [])
         self.segmentos_de_url_valida = config.get("segmentos_de_url_valida", [])
-        self.versao = versao
+        self.versao = str(versao)
 
     def _extrair_versao_da_url(self, url: str) -> Optional[str]:
         padrao = r'/(?:v|version/)?(\d+(?:\.\d+)?)/'
@@ -44,20 +43,10 @@ class Validador:
         return None
     
     def _definir_dominios(self, url_base):
-        dominio_principal_atual = extrair_dominio_principal(url_base)
-        dominios_permitidos = []
-
-        dominios_conhecidos_json = self.dominios_permitidos
-
-        if dominio_principal_atual in dominios_conhecidos_json:
-            dominios_permitidos.append(dominios_conhecidos_json[dominio_principal_atual])
-            logging.info(f"Escopo amplo ativado para a dominios conhecidos: {dominios_permitidos}")
-        else:
-            dominio_inicial = urlparse(url_base).hostname
-            dominios_permitidos.append(dominio_inicial)
-            logging.info(f"Escopo restrito para o domínio: {dominios_permitidos}")
+        dominio_inicial = urlparse(url_base).hostname
+        logging.info(f"Escopo restrito para o domínio: {dominio_inicial}")
         
-        return dominios_permitidos
+        return dominio_inicial
     
     def _validar_versao_da_url(self, versao_solicitada: str, versao_encontrada: str):
         try:
@@ -244,10 +233,6 @@ def verificar_url_completa(url_base, url):
     url_absoluta = urljoin(url_base, url)
     return url_absoluta
 
-def extrair_dominio_principal(url_completa):
-    partes_extraidas = tldextract.extract(url_completa)
-    return partes_extraidas.top_domain_under_public_suffix
-
 async def fazer_request(url, user_agent):
     headers = {'User-Agent': user_agent}
     async with httpx.AsyncClient(headers=headers, follow_redirects=True) as client:
@@ -298,7 +283,7 @@ def baixar_conteudo(nome_colecao, nome_arquivo, conteudo_markdown):
     except (OSError, IOError, TypeError) as e:
         logging.error(f"Erro ao salvar o arquivo {nome_arquivo}: {e}")
 
-async def main(nome_colecao, url, versao=None, acessar_links_internos=True, batch_size = 5, profundidade=200):
+async def main(nome_colecao, url, versao=None, acessar_links_internos=True, batch_size = 5, profundidade=1):
     logging.info("Iniciando o processo...")
 
     ua = UserAgent(browsers='Chrome', platforms='desktop')
@@ -412,7 +397,8 @@ async def main(nome_colecao, url, versao=None, acessar_links_internos=True, batc
                         nome_colecao=nome_colecao,
                         conteudo_markdown=conteudo_markdown
                     )
-                    paginas_salvas_contador += 1
+                    if not profundidade == 1:
+                        paginas_salvas_contador += 1
                     logging.info(f"conteúdo salvo em {nome_arquivo}")
 
         return {"urls_vistas": urls_vistas, "urls_para_acessar": urls_para_acessar, "urls_rejeitadas": urls_rejeitadas}
@@ -436,12 +422,11 @@ if __name__ == "__main__":
     tempo_inicio = time()
 
     params = {
-        "nome_colecao": "streamlit-docs",
-        "url": "https://docs.streamlit.io/",
-        "versao": "",
+        "nome_colecao": "python-docs",
+        "url": "https://docs.python.org/3/",
+        "versao": 3.11,
         "acessar_links_internos": True,
-        "batch_size": 10,
-        "profundidade": 12
+        "batch_size": 30,
     }
     logging.info(f"Técnica de Gerenciamento de urls com json implementada")
     logging.info(f"Iniciando o scraper com os seguintes parâmetros: {json.dumps(params, indent=4)}")

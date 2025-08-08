@@ -2,7 +2,7 @@ import threading
 import psutil
 import logging
 from time import time, sleep
-from scraper import scraper_docs
+from loaders.scraper import scraper_docs
 
 logging.basicConfig(
     filename="testando_batchs.log",

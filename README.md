@@ -26,7 +26,7 @@
   <a href="#-funcionalidades">Funcionalidades</a> •
   <a href="#-destaques-técnicos">Destaques</a> •
   <a href="#-como-executar">Como Executar</a> •
-  <a href="#-roadmap">Roadmap Futuro</a>
+  <a href="#-roadmap-futuro">Roadmap Futuro</a>
 </p>
 
 ---
@@ -67,7 +67,9 @@ Atualmente, o projeto está na **Fase 1: Coleta de Dados**. Foi desenvolvido um 
 
 ---
 
-## 📍 Como Executar (Fase Atual: Crawler)
+## 📍 Como Executar
+
+**(Fase Atual: Crawler)**
 
 Siga as instruções abaixo para executar o web crawler em seu ambiente local.
 

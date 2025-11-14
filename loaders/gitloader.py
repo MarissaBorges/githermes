@@ -44,5 +44,5 @@ def download_repo(url_repo):
         print(f"Por favor forneça uma url válida")
 
 if __name__ == "__main__":
-    repo_url = "https://github.com/MarissaBorges/teste"
+    repo_url = "https://github.com/MarissaBorges/GitHermes"
     download_repo(repo_url)

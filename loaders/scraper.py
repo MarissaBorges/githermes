@@ -15,6 +15,8 @@ import logging
 import httpx
 from fake_useragent import UserAgent
 import asyncio
+from fuzzywuzzy import fuzz
+from pathlib import Path
 
 load_dotenv(find_dotenv())
 @dataclass
@@ -32,11 +34,47 @@ class Validador:
         self.prefixos_permitidos = config.get("prefixos_permitidos", [])
         self.caminhos_raiz_permitidos = config.get("caminhos_raiz_permitidos", [])
         self.segmentos_de_url_valida = config.get("segmentos_de_url_valida", [])
-        self.versao = str(versao)
+        self.versao = str(versao) if versao else None
+        self.dominios_permitidos = config.get("dominios_permitidos", {})
+        self.dominio_base = None
+
+        self.threshold_link = config.get("pontuacao", {}).get("threshold_link", 50)
+        self.threshold_pagina = config.get("pontuacao", {}).get("threshold_pagina", 50)
+        
+        self.pesos = config.get("pontuacao", {}).get("pesos", {
+            "protocolo": 10,
+            "dominio": 15,
+            "prefixo": 15,
+            "extensao": 10,
+            "segmentos": 20,
+            "versao": 15
+        })
+        self.penalidades = config.get("pontuacao", {}).get("penalidades", {
+            "protocolo_invalido": -60,
+            "dominio_invalido": -40,
+            "extensao_binaria": -30,
+            "segmento_proibido": -40
+        })
+        
+        self.extensoes_invalidas_set = set(self.extensoes_invalidas)
+        self.protocolos_invalidos_set = set(self.protocolos_invalidos)
+        self.segmentos_invalidos_set = set(self.segmentos_invalidos)
+        self.prefixos_permitidos_set = set(self.prefixos_permitidos + self.caminhos_raiz_permitidos)
+        self.segmentos_de_url_valida_set = set(self.segmentos_de_url_valida)
+        
+        self._versao_pattern = re.compile(r'/(?:v|version/)?(\d+(?:\.\d+)?)/')
+        self._protocolo_pattern = re.compile(r'^https?://')
+        self._palavras_proibidas_pattern = re.compile(
+            r'carrinho de compras|faça seu login|fórum de discussão|compre agora',
+            re.IGNORECASE
+        )
+        self._doc_keywords_pattern = re.compile(
+            r'documentation|docs|api reference|developer guide|manual',
+            re.IGNORECASE
+        )
 
     def _extrair_versao_da_url(self, url: str) -> Optional[str]:
-        padrao = r'/(?:v|version/)?(\d+(?:\.\d+)?)/'
-        match = re.search(padrao, url)
+        match = self._versao_pattern.search(url)
         if match:
             return match.group(1)
         return None
@@ -72,86 +110,176 @@ class Validador:
 
         return (True, f"Versão '{v_encontrada}' compatível.")
 
-    def validar_pagina_atual(self, dados: DadosPagina) -> tuple[bool, str]:
-        url = dados.url_original
-        pagina_de_indice = url.endswith("/") or url.endswith("index.html") or url.endswith("contents.html")
+    async def validar_pagina_atual(self, dados: DadosPagina) -> tuple[bool, str]:
+        pontos = 0
+        detalhes = []
 
-        if not pagina_de_indice and len(dados.conteudo_markdown) < 150:
-            return (False, "Conteúdo muito curto")
+        try:
+            tamanho = len(dados.conteudo_markdown)
+            titulo_lower = dados.titulo_pagina.lower()
+            conteudo_lower = dados.conteudo_markdown.lower()
+            
+            if '404' in titulo_lower or 'not found' in titulo_lower or 'página não encontrada' in titulo_lower:
+                return (False, "Página de erro 404")
+
+            if tamanho < 100:
+                return (False, f"Conteúdo insuficiente ({tamanho} chars)")
+            
+            if self._palavras_proibidas_pattern.search(conteudo_lower):
+                pontos -= 30
+                detalhes.append("-30 contém palavras proibidas")
+            
+            tem_estrutura = '#' in dados.conteudo_markdown or '```' in dados.conteudo_markdown
+            if tem_estrutura:
+                pontos += 50
+                detalhes.append("+50 boa estrutura")
+            else:
+                pontos += 30
+                detalhes.append("+30 estrutura mínima")
+            
+            if tamanho >= 300:
+                pontos += 30
+                detalhes.append("+30 conteúdo grande")
+            elif tamanho >= 150:
+                pontos += 15
+                detalhes.append("+15 conteúdo médio")
+            else:
+                pontos += 5
+                detalhes.append("+5 conteúdo pequeno")
+            
+            if '```' in dados.conteudo_markdown or '`' in dados.conteudo_markdown:
+                pontos += 20
+                detalhes.append("+20 contém código")
+            
+            valido = pontos >= self.threshold_pagina
+            detalhes_str = " | ".join(detalhes)
+            motivo = f"Pontuação: {pontos}/{self.threshold_pagina} ({detalhes_str})"
+            
+            return (valido, motivo)
         
-        titulo_lower = dados.titulo_pagina.lower()
-        if '404' in titulo_lower or 'not found' in titulo_lower or 'página não encontrada' in titulo_lower or 'error' in titulo_lower:
-            return (False, "Página de erro 404")
+        except Exception as e:
+            logging.error(f"Erro ao validar página {dados.url_original}: {e}")
+            return (False, f"Erro na validação: {str(e)}")
+
+    async def validar_link_novo(self, url_base: str, link_url: str) -> tuple[bool, str]:
+        pontos = 0
+        detalhes = []
+
+        try:
+            link_completo = urljoin(url_base, link_url)
+            parsed_link = urlparse(link_completo)
+            dominio_do_link = parsed_link.hostname
+            caminho_do_link = (parsed_link.path or "/").lower()
+            str_link = parsed_link.scheme + "://" + parsed_link.netloc + parsed_link.path
+
+            if not self.dominio_base:
+                self.dominio_base = urlparse(url_base).hostname
+
+            protocolo_valido = not any(link_completo.startswith(p) for p in self.protocolos_invalidos)
+            if protocolo_valido:
+                resultado = self.pesos.get("protocolo", 10)
+                detalhes.append(f"+{self.pesos.get('protocolo', 10)} protocolo válido")
+            else:
+                resultado = self.penalidades.get("protocolo", -60)
+                detalhes.append(f"{self.penalidades.get('protocolo', -60)} protocolo inválido")
+            pontos += resultado
+
+            lista_dominios_permitidos = set()
+            if isinstance(self.dominios_permitidos, dict):
+                for dominios_list in self.dominios_permitidos.values():
+                    if isinstance(dominios_list, list):
+                        lista_dominios_permitidos.update(dominios_list)
+            
+            dominio_valido = (dominio_do_link == self.dominio_base or dominio_do_link in lista_dominios_permitidos)
+            if dominio_valido:
+                resultado = self.pesos.get("dominio", 15)
+                detalhes.append(f"+{self.pesos.get('dominio', 15)} domínio válido")
+            else:
+                resultado = self.penalidades.get("dominio", -40)
+                detalhes.append(f"{self.pesos.get('dominio', -40)} domínio inválido ({dominio_do_link})")
+            pontos += resultado
+
+            if caminho_do_link == "/":
+                resultado = self.pesos.get("prefixo", 15)
+                detalhes.append(f"+{self.pesos.get('prefixo', 15)} página raiz")
+            else:
+                prefixo_valido = False
+                for prefixo in self.prefixos_permitidos_set:
+                    if caminho_do_link.startswith(f"/{prefixo}/") or caminho_do_link == f"/{prefixo}":
+                        prefixo_valido = True
+                        break
+                
+                if prefixo_valido:
+                    resultado = self.pesos.get("prefixo", 15)
+                    detalhes.append(f"+{self.pesos.get('prefixo', 15)} prefixo válido")
+                else:
+                    razao_fuzzy = max(
+                        [fuzz.ratio(caminho_do_link, f"/{p}/") for p in self.prefixos_permitidos] + [0]
+                    )
+                    if razao_fuzzy >= 75:
+                        pts_fuzzy = int(self.pesos.get("prefixo", 15) * 0.8)
+                        resultado = pts_fuzzy
+                        detalhes.append(f"+{pts_fuzzy} prefixo similar ({razao_fuzzy}%)")
+                    else:
+                        detalhes.append(f"+0 prefixo desconhecido")
+            pontos += resultado
         
-        conteudo_lower = dados.conteudo_markdown.lower()
-        palavras_invalidas = ['faça seu login', 'carrinho de compras', 'fórum de discussão', 'comentários', 'compre', 'blog de discussões']
-        if any(palavra in conteudo_lower for palavra in palavras_invalidas):
-            return (False, "Página inválida, foi encontrada uma palavra inválida")
+            caminho_sem_barra = caminho_do_link.rstrip('/')
+            if '.' in caminho_sem_barra.split('/')[-1]:
+                if any(caminho_sem_barra.endswith(ext) for ext in self.extensoes_invalidas_set):
+                    resultado = self.penalidades.get("extensao", -30)
+                    detalhes.append(f"{self.penalidades.get('extensao', -30)} extensão binária")
+                else:
+                    resultado = self.pesos.get("extensao", 10)
+                    detalhes.append(f"+{self.pesos.get('extensao', 10)} extensão válida")
+            else:
+                resultado = self.pesos.get("extensao", 10)
+                detalhes.append(f"+{self.pesos.get('extensao', 10)} HTML válido")
+            pontos += resultado
+
+            segmento_invalido = any(seg in caminho_do_link.lower() for seg in self.segmentos_invalidos_set)
+            if segmento_invalido:
+                resultado = self.penalidades.get("segmentos", -50)
+                detalhes.append(f"{self.penalidades.get('segmentos', -50)} segmento proibido")
+            else:
+                resultado = self.pesos.get("segmentos", 20)
+                detalhes.append(f"+{self.pesos.get('segmentos', 20)} sem segmentos proibidos")
+            pontos += resultado
         
-        return (True, "Página válida")
+            if self.versao:
+                versao_encontrada = self._extrair_versao_da_url(link_url)
+                if versao_encontrada:
+                    try:
+                        v_desejada = version.parse(self.versao)
+                        v_encontrada = version.parse(versao_encontrada)
+                        if v_encontrada.major == v_desejada.major:
+                            pontos += self.pesos.get("versao", 15)
+                            detalhes.append(f"+{self.pesos.get('versao', 15)} versão compatível")
+                        else:
+                            detalhes.append(f"+0 versão diferente ({v_encontrada.major} vs {v_desejada.major})")
+                    except Exception as e:
+                        logging.debug(f"Erro ao validar versão: {e}")
 
-    def validar_link_novo(self, url_base: str, link_url: str) -> tuple[bool, str]:
-        link_completo = urljoin(url_base, link_url)
-        parsed_link = urlparse(link_completo)
-        str_link = parsed_link.scheme + "://" + parsed_link.netloc + parsed_link.path
-
-        if any(str_link.startswith(protocolo) for protocolo in self.protocolos_invalidos):
-            return (False, f"Protocolo inválido, link: {str_link}")
-
-        dominios_permitidos = self._definir_dominios(url_base)
-        dominio_do_link = parsed_link.hostname
-        if dominio_do_link not in dominios_permitidos[0]:
-            return (False, f"Domínio inválido, domínio: {dominio_do_link}")
-
-        caminho_do_link = (parsed_link.path or "/").lower()
-        if caminho_do_link == "/":
-            return (True, "Link aprovado (página inicial)")
-        logging.info(f"Caminho do link: {caminho_do_link}")
-
-        prefixo_valido = False
-        if self.versao:
-            major_version = str(version.parse(self.versao).major)
-            prefixo_valido = any(
-                caminho_do_link.startswith(f"/{major_version}/{prefixo_base}/")
-                for prefixo_base in self.prefixos_permitidos
-            )
+            valido = pontos >= self.threshold_link
+            detalhes_str = " | ".join(detalhes)
+            motivo = f"Pontuação: {pontos}/{self.threshold_link} ({detalhes_str})"
+            
+            return (valido, motivo)
         
-        caminho_raiz_valido = any(
-            caminho_do_link.startswith(f"/{prefixo}/") or caminho_do_link == f"/{prefixo}"
-            for prefixo in self.caminhos_raiz_permitidos
-        )
-        if not (prefixo_valido or caminho_raiz_valido):
-            return (False, f"Prefixo inválido, caminho do link: {caminho_do_link}")
-        
-        caminho_sem_barra = caminho_do_link.rstrip('/')
-        if '.' in caminho_sem_barra.split('/')[-1]:
-            if any(caminho_sem_barra.endswith(extensao) for extensao in self.extensoes_invalidas):
-                return (False, "Extensão de arquivo invalida")
-
-        if any(item_invalido in caminho_do_link.lower() for item_invalido in self.segmentos_invalidos):
-            return (False, f"Segmento inválido, link: {str_link}")
-        
-        if self.versao:
-            versao_encontrada = self._extrair_versao_da_url(link_url)
-            if versao_encontrada:
-                validacao, msg = self._validar_versao_da_url(self.versao, versao_encontrada)
-                if not validacao:
-                    return False, msg
-
-        return (True, "Link aprovado")
+        except Exception as e:
+            logging.error(f"Erro ao validar link {link_url}: {e}")
+            return (False, f"Erro na validação: {str(e)}")
 
     async def validar_url_inicial(self, url, user_agent):
         parsed_url = urlparse(url)
         hostname  = parsed_url.hostname
         path = parsed_url.path
 
-        segmentos_de_url_valida = self.segmentos_de_url_valida
-
         primeiro_segmento_host = hostname.split('.')[0]
-        if primeiro_segmento_host in segmentos_de_url_valida:
+        if primeiro_segmento_host in self.segmentos_de_url_valida_set:
             return (True, f"URL aprovada pelo subdomínio '{primeiro_segmento_host}'.")
         
-        if path.startswith(tuple(f'/{segmento}/' for segmento in segmentos_de_url_valida)):
+        if path.startswith(tuple(f'/{segmento}/' for segmento in self.segmentos_de_url_valida)):
             return (True, "URL aprovada pelo prefixo do caminho.")
         
         try:
@@ -163,11 +291,11 @@ class Validador:
         pontuacao = []
         
         titulo = soup.title.string.lower() if soup.title and soup.title.string else ''
-        if any(sinal in titulo for sinal in ['documentation', 'docs', 'api reference', 'developer guide', 'manual']):
+        if self._doc_keywords_pattern.search(titulo):
             pontuacao.append(True)
 
         h1 = soup.h1.string.lower() if soup.h1 and soup.h1.string else ''
-        if any(sinal in h1 for sinal in ['documentation', 'api', 'guide']):
+        if self._doc_keywords_pattern.search(h1):
             pontuacao.append(True)
 
         if soup.find('pre'):
@@ -183,32 +311,47 @@ class Validador:
             return (False, f"URL rejeitada. Não é uma documentação")
 
 class GerenciarJson():
+    def __init__(self, caminho_colecao=None):
+        self.caminho_colecao = caminho_colecao
+        self.dados_cache = {}
+        self._carregado = False
+    
+    def _garantir_carregado(self, nome_colecao=None):
+        if nome_colecao and not self._carregado:
+            caminho = f"data/collections/{nome_colecao}"
+            caminho_json = f"{caminho}/urls.json"
+            try:
+                if os.path.exists(caminho_json):
+                    with open(caminho_json, "r", encoding="utf-8") as f:
+                        self.dados_cache = json.load(f)
+                else:
+                    self.dados_cache = {}
+            except Exception as e:
+                logging.error(f"Erro ao ler o arquivo JSON: {e}")
+                self.dados_cache = {}
+            self._carregado = True
+    
     def adicionar_no_json(self, nome_colecao, url, tipo_url):
+        self._garantir_carregado(nome_colecao)
+        
+        if tipo_url not in self.dados_cache:
+            self.dados_cache[tipo_url] = []
+        
+        if url not in self.dados_cache[tipo_url]:
+            self.dados_cache[tipo_url].append(url)
+    
+    def salvar_json(self, nome_colecao):
         caminho = f"data/collections/{nome_colecao}"
         caminho_json = f"{caminho}/urls.json"
         
         os.makedirs(caminho, exist_ok=True)
         
         try:
-            if os.path.exists(caminho_json):
-                with open(caminho_json, "r", encoding="utf-8") as f:
-                    dados_json = json.load(f)
-            else:
-                dados_json = {}
+            with open(caminho_json, "w", encoding="utf-8") as f:
+                json.dump(self.dados_cache, f, ensure_ascii=False, indent=2)
+            logging.info(f"JSON salvo com sucesso em {caminho_json}")
         except Exception as e:
-            logging.error(f"Erro ao ler o arquivo JSON: {e}")
-            dados_json = {}
-        
-        if tipo_url not in dados_json:
-            dados_json[tipo_url] = []
-        
-        if url not in dados_json[tipo_url]:
-            dados_json[tipo_url].append(url)
-            try:
-                with open(caminho_json, "w", encoding="utf-8") as f:
-                    json.dump(dados_json, f, ensure_ascii=False, indent=2)
-            except Exception as e:
-                logging.error(f"Erro ao salvar o arquivo JSON: {e}")
+            logging.error(f"Erro ao salvar o arquivo JSON: {e}")
 
     def carregar_json(self, caminho_do_arquivo="config_urls.json"):
         try:
@@ -260,10 +403,13 @@ def converter_html_para_markdown(conteudo_html, url):
     html_limpo = documento.summary()
     titulo_pagina = documento.title()
     conteudo_markdown = md(str(html_limpo))
+    
     links = []
     for elemento in soup.find_all('a', href=True):
         if isinstance(elemento, Tag):
-            links.append(elemento.get("href"))
+            href = elemento.attrs.get("href")
+            if href:
+                links.append(href)
 
     return DadosPagina(
         url_original=url,
@@ -290,22 +436,21 @@ async def main(nome_colecao, url, versao=None, acessar_links_internos=True, batc
 
     url = verificar_protocolo_https(url)
     logging.info(url)
-    gerenciar_json = GerenciarJson()
+    
+    gerenciar_json = GerenciarJson(nome_colecao)
     config = gerenciar_json.carregar_json("config_urls.json")
     validador = Validador(config, versao)
 
-    url_valida = await validador.validar_url_inicial(url, user_agent)
+    url_valida, msg_valida = await validador.validar_url_inicial(url, user_agent)
     if url_valida:
         json_urls_vistas = gerenciar_json.carregar_json(f"data/collections/{nome_colecao}/urls.json")
-        json_urls_vistas = json_urls_vistas.get("urls_vistas", [])
-        urls_vistas = []
-        urls_para_acessar = []
+        json_urls_vistas_set = set(json_urls_vistas.get("urls_vistas", []))
+        urls_vistas = set()
+        urls_para_acessar = [url]
         urls_rejeitadas = []
         paginas_salvas_contador = 0
 
-        if not url in urls_para_acessar:
-            urls_para_acessar.append(url)
-            gerenciar_json.adicionar_no_json(nome_colecao, url, "urls_vistas")
+        gerenciar_json.adicionar_no_json(nome_colecao, url, "urls_vistas")
 
         async with async_playwright() as pw:
             navegador = await pw.chromium.launch(headless=True)
@@ -319,7 +464,7 @@ async def main(nome_colecao, url, versao=None, acessar_links_internos=True, batc
                     if url_atual in urls_vistas:
                         continue
                     batch.append(url_atual)
-                    urls_vistas.append(url_atual)
+                    urls_vistas.add(url_atual)
 
                 if not batch:
                     logging.info("Nenhuma URL válida para processar no batch. Encerrando.")
@@ -341,7 +486,7 @@ async def main(nome_colecao, url, versao=None, acessar_links_internos=True, batc
                         continue
 
                     if acessar_links_internos:
-                        pagina_valida, pagina_motivo = validador.validar_pagina_atual(dados_pagina_atual)
+                        pagina_valida, pagina_motivo = await validador.validar_pagina_atual(dados_pagina_atual)
 
                         logging.info(f"Processando {len(dados_pagina_atual.links)} novos links")
                         for link in dados_pagina_atual.links:
@@ -359,11 +504,11 @@ async def main(nome_colecao, url, versao=None, acessar_links_internos=True, batc
                                 logging.info(f"Link ignorado: {url_limpa} (apenas esquema)")
                                 continue
 
-                            if url_limpa in urls_vistas or url_limpa in urls_para_acessar or url_limpa in urls_rejeitadas or url_limpa in json_urls_vistas:
+                            if url_limpa in urls_vistas or url_limpa in urls_para_acessar or url_limpa in urls_rejeitadas or url_limpa in json_urls_vistas_set:
                                 logging.info(f"Link já processado ou na fila: {url_limpa}")
                                 continue
 
-                            link_valido, link_motivo = validador.validar_link_novo(
+                            link_valido, link_motivo = await validador.validar_link_novo(
                                 url_base=url_atual,
                                 link_url=url_limpa,
                             )
@@ -400,9 +545,12 @@ async def main(nome_colecao, url, versao=None, acessar_links_internos=True, batc
                         paginas_salvas_contador += 1
                     logging.info(f"conteúdo salvo em {nome_arquivo}")
 
-        return {"urls_vistas": urls_vistas, "urls_para_acessar": urls_para_acessar, "urls_rejeitadas": urls_rejeitadas}
+            gerenciar_json.salvar_json(nome_colecao)
+            await navegador.close()
+
+        return {"urls_vistas": list(urls_vistas), "urls_para_acessar": urls_para_acessar, "urls_rejeitadas": urls_rejeitadas}
     
-    return "URL não parece ser de uma documentação"
+    return f"URL não parece ser de uma documentação: {msg_valida}"
 
 def scraper_docs(**params):
     logging.info(f"Iniciando o scraper com os seguintes parâmetros: {json.dumps(params, indent=4)}")
@@ -426,6 +574,7 @@ if __name__ == "__main__":
         "versao": 3.11,
         "acessar_links_internos": True,
         "batch_size": 30,
+        "profundidade": 200
     }
     logging.info(f"Técnica de Gerenciamento de urls com json implementada")
     logging.info(f"Iniciando o scraper com os seguintes parâmetros: {json.dumps(params, indent=4)}")
@@ -436,5 +585,11 @@ if __name__ == "__main__":
 
     tempo_execucao = time() - tempo_inicio
     logging.info(f"O programa levou {tempo_execucao:.2f} segundos para executar")
-    print("programa finalizado")
-    print(f"O programa levou {tempo_execucao:.2f} segundos para executar")
+    print(f"\n✅ Concluído em {tempo_execucao:.2f}s")
+    
+    if isinstance(resultado, dict):
+        print(f"  URLs vistas: {len(resultado.get('urls_vistas', []))}")
+        print(f"  URLs para acessar: {len(resultado.get('urls_para_acessar', []))}")
+        print(f"  URLs rejeitadas: {len(resultado.get('urls_rejeitadas', []))}")
+    else:
+        print(resultado)

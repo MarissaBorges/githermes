@@ -101,8 +101,12 @@ python -m venv .venv
 # Ativar no macOS/Linux:
 source .venv/bin/activate
 
-# Instale as dependências
-pip install -r requirements.txt
+# Instale o projeto e suas dependências
+# Opção 1: Usando pip (modo de desenvolvimento)
+pip install -e .
+
+# Opção 2: Usando uv (mais rápido)
+uv sync
 
 # O Playwright requer a instalação dos navegadores
 playwright install

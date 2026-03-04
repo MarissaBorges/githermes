@@ -9,25 +9,6 @@
     "help"
   ],
 
-  "pontuacao": {
-    "threshold_link": 60,
-    "threshold_pagina": 50,
-    "pesos": {
-      "protocolo": 10,
-      "dominio": 15,
-      "prefixo": 15,
-      "extensao": 10,
-      "segmentos": 20,
-      "versao": 15
-    },
-    "penalidades": {
-      "protocolo_invalido": -60,
-      "dominio_invalido": -40,
-      "extensao_binaria": -30,
-      "segmento_proibido": -40
-    }
-  },
-
   "dominios_permitidos": {
     "python": ["docs.python.org", "devguide.python.org"],
     "java": ["docs.oracle.com", "openjdk.org"],

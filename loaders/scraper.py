@@ -6,7 +6,6 @@ import os
 import json
 from time import time
 from readability import Document
-from typing import Optional
 from dataclasses import dataclass
 import re
 from packaging import version
@@ -34,7 +33,7 @@ class Validador:
     extensão, segmentos de caminho, versão e conteúdo da página.
     """
 
-    def __init__(self, config, versao):
+    def __init__(self, config: dict, versao: float):
         """
         Inicializa o validador com configurações e versão.
 
@@ -62,19 +61,51 @@ class Validador:
 
         self._versao_pattern = re.compile(r"/(?:v|version/)?(\d+(?:\.\d+)?)/")
 
-    def _extrair_versao_da_url(self, url: str) -> Optional[str]:
+    def _extrair_versao_da_url(self, url: str) -> str | None:
+        """
+        Método interno responsável por extrair a versão de uma url
+
+        Args:
+            url: a URL do site para extrair a versão
+
+        Returns:
+            String caso a versão seja encontrada
+            None para versão não encontrada
+        """
         match = self._versao_pattern.search(url)
         if match:
             return match.group(1)
         return None
 
-    def _definir_dominios(self, url_base):
+    def _definir_dominios(self, url_base: str) -> str | None:
+        """
+        Método interno que define os domínios usando uma url como base
+
+        Args:
+            url_base: A URL de base para extrair o domínio
+
+        Returns:
+            String para domínio encontrado
+            None para domínio não encontrado
+        """
         dominio_inicial = urlparse(url_base).hostname
         logging.info(f"Escopo restrito para o domínio: {dominio_inicial}")
 
         return dominio_inicial
 
-    def _validar_versao_da_url(self, versao_solicitada: str, versao_encontrada: str):
+    def _validar_versao_da_url(
+        self, versao_solicitada: str, versao_encontrada: str
+    ) -> tuple[bool, str]:
+        """
+        Método interno responsável por validar a versão encontrada em uma url de acordo com a versão solicitada
+
+        Args:
+            versao_solicitada: Versão que foi solicitada pelo usuário
+            versao_encontrada: Versão que foi encontrada na url do site
+
+        Returns:
+            Tupla (valido, mensagem)
+        """
         try:
             v_desejada = version.parse(versao_solicitada)
         except version.InvalidVersion:
@@ -232,8 +263,7 @@ class Validador:
         """
         Valida a URL inicial fornecida pelo usuário.
 
-        Verifica subdomínios, prefixos, título e conteúdo HTML para confirmar
-        que é uma documentação válida.
+        Verifica subdomínios, prefixos, título e conteúdo HTML para confirmar que é uma documentação válida.
 
         Args:
             url: URL a validar
@@ -290,20 +320,23 @@ class GerenciarJson:
     Implementa cache em memória para evitar leituras repetidas de arquivo.
     """
 
-    def __init__(self, caminho_colecao=None):
+    def __init__(self, nome_colecao=None):
         """
         Inicializa o gerenciador de JSON.
 
         Args:
-            caminho_colecao: Caminho da coleção (opcional)
+            nome_colecao: Caminho da coleção (opcional)
         """
-        self.caminho_colecao = caminho_colecao
+        self.nome_colecao = nome_colecao
         self.dados_cache = {}
         self._carregado = False
 
-    def _garantir_carregado(self, nome_colecao=None):
-        if nome_colecao and not self._carregado:
-            caminho = f"data/collections/{nome_colecao}"
+    def _garantir_carregado(self) -> None:
+        """
+        Função que garante que o arquivo urls.json existe e esta carregado para cada coleção
+        """
+        if self.nome_colecao and not self._carregado:
+            caminho = f"data/collections/{self.nome_colecao}"
             caminho_json = f"{caminho}/urls.json"
             try:
                 if os.path.exists(caminho_json):
@@ -316,16 +349,15 @@ class GerenciarJson:
                 self.dados_cache = {}
             self._carregado = True
 
-    def adicionar_no_json(self, nome_colecao: str, url: str, tipo_url: str) -> None:
+    def adicionar_no_json(self, url: str, tipo_url: str) -> None:
         """
         Adiciona uma URL ao cache de JSON.
 
         Args:
-            nome_colecao: Nome da coleção
             url: URL a adicionar
             tipo_url: Tipo de URL (ex: 'urls_vistas', 'urls_para_acessar')
         """
-        self._garantir_carregado(nome_colecao)
+        self._garantir_carregado()
 
         if tipo_url not in self.dados_cache:
             self.dados_cache[tipo_url] = []
@@ -333,14 +365,11 @@ class GerenciarJson:
         if url not in self.dados_cache[tipo_url]:
             self.dados_cache[tipo_url].append(url)
 
-    def salvar_json(self, nome_colecao: str) -> None:
+    def salvar_json(self) -> None:
         """
         Salva o cache JSON em arquivo.
-
-        Args:
-            nome_colecao: Nome da coleção a salvar
         """
-        caminho = f"data/collections/{nome_colecao}"
+        caminho = f"data/collections/{self.nome_colecao}"
         caminho_json = f"{caminho}/urls.json"
 
         os.makedirs(caminho, exist_ok=True)
@@ -521,7 +550,8 @@ async def main(
     gerenciar_json = GerenciarJson(nome_colecao)
     config_path = Path(__file__).parent / "config_urls.json"
     config = gerenciar_json.carregar_json(str(config_path))
-    validador = Validador(config, versao)
+    if versao:
+        validador = Validador(config, versao)
 
     url_valida, msg_valida = await validador.validar_url_inicial(url, user_agent)
     if url_valida:
@@ -534,7 +564,7 @@ async def main(
         urls_rejeitadas = []
         paginas_salvas_contador = 0
 
-        gerenciar_json.adicionar_no_json(nome_colecao, url, "urls_vistas")
+        gerenciar_json.adicionar_no_json(url, "urls_vistas")
 
         async with async_playwright() as pw:
             navegador = await pw.chromium.launch(headless=True)
@@ -665,9 +695,7 @@ async def main(
                     )
                     conteudo_markdown = dados_pagina_atual.conteudo_markdown
 
-                    gerenciar_json.adicionar_no_json(
-                        nome_colecao, url_atual, "urls_vistas"
-                    )
+                    gerenciar_json.adicionar_no_json(url_atual, "urls_vistas")
                     baixar_conteudo(
                         nome_arquivo=nome_arquivo,
                         nome_colecao=nome_colecao,
@@ -677,7 +705,7 @@ async def main(
                         paginas_salvas_contador += 1
                     logging.info(f"conteúdo salvo em {nome_arquivo}")
 
-            gerenciar_json.salvar_json(nome_colecao)
+            gerenciar_json.salvar_json()
             await navegador.close()
 
         return {

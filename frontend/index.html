@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html lang="pt-BR" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GitHermes - Workspace</title>
+    
+    <!-- Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- Tailwind Config -->
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ['Inter', 'sans-serif'],
+                        mono: ['JetBrains Mono', 'monospace'],
+                    },
+                    colors: {
+                        background: '#09090b',
+                        surface: '#18181b',
+                        border: '#27272a',
+                        borderHover: '#3f3f46',
+                        primary: '#fafafa',
+                        secondary: '#a1a1aa',
+                        tertiary: '#71717a',
+                        accent: '#ffffff',
+                        gold: '#fbbf24',
+                    }
+                }
+            }
+        }
+    </script>
+    
+    <!-- GSAP for Animations -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.2/gsap.min.js"></script>
+    
+    <!-- Phosphor Icons -->
+    <script src="https://unpkg.com/@phosphor-icons/web"></script>
+
+    <!-- Custom CSS and JS -->
+    <link href="css/style.css" rel="stylesheet">
+    <script src="js/app.js"></script>
+</head>
+<body class="h-screen w-screen flex overflow-hidden selection:bg-white/20 selection:text-white">
+
+    <!-- Loader Background -->
+    <div id="loader-bg" class="fixed inset-0 z-[95] bg-background"></div>
+
+    <!-- JARVIS Holographic Loader & Floating Button -->
+    <div id="loader-wrapper" class="fixed inset-0 z-[100] flex flex-col items-center justify-center pointer-events-none">
+        
+        <!-- Orb Container (Becomes floating button) -->
+        <div id="orb-container" class="relative z-10 w-full max-w-[900px] aspect-square flex items-center justify-center perspective-[1200px] pointer-events-auto cursor-pointer group" onclick="switchView('#view-chat')">
+            <!-- Intense core ambient glow -->
+            <div id="orb-glow" class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-48 h-48 bg-gold rounded-full opacity-20 blur-[80px] z-0 transition-all duration-1000 group-hover:opacity-40 group-hover:scale-110"></div>
+            
+            <!-- Chaotic JARVIS Core (Canvas) -->
+            <canvas id="jarvis-canvas" class="absolute inset-0 w-full h-full mix-blend-screen"></canvas>
+        </div>
+        
+        <div id="loader-text" class="absolute bottom-16 left-1/2 -translate-x-1/2 flex flex-col items-center gap-2 z-20 pointer-events-none">
+            <span class="text-gold font-mono text-sm tracking-[0.3em] uppercase animate-pulse">Initializing System</span>
+            <div class="w-48 h-1 bg-surface rounded-full overflow-hidden">
+                <div class="h-full bg-gold w-full origin-left scale-x-0 animate-[fillBar_2s_ease-in-out_forwards]"></div>
+            </div>
+        </div>
+    </div>
+    
+    <style>
+        @keyframes fillBar {
+            0% { transform: scaleX(0); }
+            50% { transform: scaleX(0.7); }
+            100% { transform: scaleX(1); }
+        }
+    </style>
+
+    <!-- Toast Notification Container -->
+    <div id="toast-container" class="fixed bottom-6 right-6 z-[90] flex flex-col items-end"></div>
+
+    <!-- Sidebar -->
+    <aside class="w-64 border-r border-border bg-background flex flex-col pt-8 pb-6 px-4 z-10 relative shadow-[1px_0_15px_rgba(0,0,0,0.5)]">
+        <!-- Logo -->
+        <div class="flex items-center gap-3 px-2 mb-10">
+            <div class="w-6 h-6 rounded border border-border flex items-center justify-center">
+                <i class="ph ph-command text-gold text-sm font-bold"></i>
+            </div>
+            <span class="font-medium tracking-tight text-sm">GitHermes</span>
+        </div>
+
+        <!-- Navigation -->
+        <nav class="flex-1 flex flex-col gap-1">
+            <div class="px-2 mb-2">
+                <span class="text-[10px] font-medium text-tertiary uppercase tracking-wider">Workspace</span>
+            </div>
+            
+            <a href="#" data-target="#view-overview" class="flex items-center gap-3 px-2 py-1.5 rounded-md bg-surface text-primary text-sm font-medium transition-colors">
+                <i class="ph ph-squares-four text-lg"></i>
+                Overview
+            </a>
+            
+            <a href="#" data-target="#view-chat" class="flex items-center gap-3 px-2 py-1.5 rounded-md text-secondary hover:text-primary hover:bg-surface/50 text-sm font-medium transition-colors">
+                <i class="ph ph-chat-teardrop-text text-lg"></i>
+                Hermes Chat
+            </a>
+
+            <a href="#" data-target="#view-repos" class="flex items-center gap-3 px-2 py-1.5 rounded-md text-secondary hover:text-primary hover:bg-surface/50 text-sm font-medium transition-colors">
+                <i class="ph ph-git-branch text-lg"></i>
+                Repositories
+            </a>
+            
+            <a href="#" data-target="#view-docs" class="flex items-center gap-3 px-2 py-1.5 rounded-md text-secondary hover:text-primary hover:bg-surface/50 text-sm font-medium transition-colors">
+                <i class="ph ph-books text-lg"></i>
+                Documentation
+            </a>
+        </nav>
+
+        <div class="mt-auto pt-4 border-t border-border flex items-center gap-3 px-2 cursor-pointer hover:bg-surface/50 p-2 rounded transition-colors" onclick="showToast('Settings not available', 'error')">
+            <div class="w-7 h-7 rounded-full bg-surface border border-border flex items-center justify-center">
+                <i class="ph ph-gear text-secondary text-sm"></i>
+            </div>
+            <div class="flex flex-col">
+                <span class="text-sm font-medium text-primary leading-tight">Preferences</span>
+            </div>
+        </div>
+    </aside>
+
+    <!-- Main Content -->
+    <main class="flex-1 flex flex-col min-w-0 bg-background relative z-0">
+        
+        <!-- Header -->
+        <header class="h-14 border-b border-border flex items-center justify-between px-8 shrink-0 relative z-20 bg-background">
+            <div class="flex items-center gap-2 text-sm text-secondary" id="breadcrumb">
+                <span>Workspace</span>
+                <i class="ph ph-caret-right text-tertiary text-xs"></i>
+                <span class="text-primary font-medium">Overview</span>
+            </div>
+            
+            <div class="flex items-center gap-4 text-xs font-mono text-tertiary">
+                <div class="flex items-center gap-2" onclick="showToast('Engine diagnostic normal', 'success')">
+                    <div class="w-1.5 h-1.5 rounded-full bg-gold shadow-[0_0_8px_rgba(251,191,36,0.6)] animate-pulse cursor-pointer"></div>
+                    Engine Ready
+                </div>
+            </div>
+        </header>
+
+        <!-- View Container (Relative for absolute children positioning) -->
+        <div class="flex-1 overflow-hidden relative">
+            
+            <!-- VIEW: OVERVIEW (Default) -->
+            <div id="view-overview" class="absolute inset-0 overflow-y-auto px-8 py-8 flex flex-col gap-10 hidden">
+                <section class="max-w-5xl w-full mx-auto grid grid-cols-1 lg:grid-cols-2 gap-8">
+                    <!-- Status Card -->
+                    <div class="col-span-1 lg:col-span-2 p-6 rounded-xl border border-border bg-surface/20 flex items-center justify-between">
+                        <div>
+                            <h1 class="text-2xl font-medium text-primary mb-1">Welcome back.</h1>
+                            <p class="text-sm text-secondary">GitHermes is monitoring 2 repositories and 3 documentation sources.</p>
+                        </div>
+                        <button class="px-4 py-2 bg-primary text-background text-sm font-medium rounded-lg hover:bg-gold transition-colors" onclick="switchView('#view-chat')">
+                            Open Chat
+                        </button>
+                    </div>
+
+                    <!-- Quick Repos -->
+                    <div class="flex flex-col gap-4">
+                        <div class="flex items-center justify-between">
+                            <h2 class="text-sm font-medium text-primary">Active Repositories</h2>
+                            <button class="text-xs text-tertiary hover:text-primary transition-colors" onclick="switchView('#view-repos')">View All</button>
+                        </div>
+                        <div class="flex flex-col gap-2">
+                            <!-- Repo Item -->
+                            <div class="group p-4 rounded-lg border border-border hover:border-gold/30 bg-surface/30 hover:bg-surface transition-all flex flex-col gap-3 cursor-pointer">
+                                <div class="flex items-start justify-between">
+                                    <div class="flex items-center gap-2">
+                                        <i class="ph ph-folder-simple text-tertiary group-hover:text-gold transition-colors"></i>
+                                        <span class="text-sm font-medium text-primary">my-nextjs-app</span>
+                                    </div>
+                                    <span class="text-[10px] font-mono text-tertiary">Indexed</span>
+                                </div>
+                                <div class="flex items-center gap-4 text-[11px] font-mono text-tertiary mt-1">
+                                    <span class="flex items-center gap-1"><i class="ph ph-clock"></i> 2h ago</span>
+                                    <span class="flex items-center gap-1"><i class="ph ph-file-code"></i> 142 files</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Quick Docs -->
+                    <div class="flex flex-col gap-4">
+                        <div class="flex items-center justify-between">
+                            <h2 class="text-sm font-medium text-primary">Knowledge Base</h2>
+                        </div>
+                        <div class="flex flex-col gap-2">
+                            <!-- Doc Item -->
+                            <div class="group flex items-center justify-between p-3 rounded-lg border border-transparent hover:border-border hover:bg-surface transition-all cursor-pointer">
+                                <div class="flex flex-col gap-1">
+                                    <span class="text-sm font-medium text-primary">React 18 Architecture</span>
+                                    <span class="text-xs text-tertiary">Source: react.dev</span>
+                                </div>
+                                <i class="ph ph-arrow-up-right text-tertiary opacity-0 group-hover:opacity-100 transition-opacity"></i>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+            </div>
+
+            <!-- VIEW: CHAT INTERFACE -->
+            <div id="view-chat" class="absolute inset-0 flex flex-col hidden bg-surface/10">
+                <!-- Chat Messages Area -->
+                <div class="flex-1 overflow-y-auto px-8 py-8 flex flex-col gap-6 max-w-4xl w-full mx-auto" id="chat-messages">
+                    <!-- System Welcome -->
+                    <div class="flex gap-4 items-start">
+                        <div class="w-8 h-8 rounded-full bg-surface border border-gold/30 flex items-center justify-center shrink-0 shadow-[inset_0_0_8px_rgba(251,191,36,0.1)]">
+                            <i class="ph ph-cpu text-gold text-sm"></i>
+                        </div>
+                        <div class="flex flex-col gap-1 w-full mt-1">
+                            <span class="text-xs font-mono text-gold mb-1">GitHermes System</span>
+                            <div class="text-primary text-sm leading-relaxed p-4 bg-surface/50 border border-border rounded-2xl rounded-tl-sm">
+                                All systems online. I have full context on <span class="font-mono text-xs bg-surface px-1 py-0.5 rounded text-secondary">my-nextjs-app</span> and <span class="font-mono text-xs bg-surface px-1 py-0.5 rounded text-secondary">python-backend-api</span>. How can I assist you today?
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- User Message -->
+                    <div class="flex gap-4 items-start flex-row-reverse">
+                        <div class="w-8 h-8 rounded-full bg-primary flex items-center justify-center shrink-0">
+                            <i class="ph ph-user text-background text-sm"></i>
+                        </div>
+                        <div class="flex flex-col gap-1 w-full max-w-[80%] mt-1 items-end">
+                            <span class="text-xs font-mono text-secondary mb-1">You</span>
+                            <div class="text-background text-sm leading-relaxed p-4 bg-primary rounded-2xl rounded-tr-sm shadow-md">
+                                Can you check the React 18 documentation and see if my layout.tsx is using Suspense correctly?
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- System Processing / Thinking -->
+                    <div class="flex gap-4 items-start opacity-70">
+                        <div class="w-8 h-8 rounded-full bg-surface border border-gold/30 flex items-center justify-center shrink-0 animate-pulse">
+                            <i class="ph ph-arrows-clockwise text-gold text-sm animate-spin"></i>
+                        </div>
+                        <div class="flex flex-col gap-1 w-full mt-1">
+                            <div class="text-secondary text-sm font-mono flex items-center gap-2 p-2">
+                                Searching knowledge base...
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Chat Input Area -->
+                <div class="p-6 border-t border-border bg-background">
+                    <div class="max-w-4xl w-full mx-auto relative group">
+                        <div class="absolute -inset-0.5 bg-gradient-to-r from-borderHover to-border rounded-xl blur opacity-20 group-hover:opacity-40 transition duration-500"></div>
+                        <div class="relative bg-background border border-border focus-within:border-gold/50 focus-within:shadow-[0_0_15px_rgba(251,191,36,0.1)] rounded-xl p-2 transition-all duration-300 flex items-end">
+                            <button class="p-2 text-tertiary hover:text-primary transition-colors rounded-lg mb-1" onclick="showToast('Context attached', 'success')">
+                                <i class="ph ph-paperclip text-lg"></i>
+                            </button>
+                            <textarea 
+                                class="w-full bg-transparent text-sm py-2 px-2 text-primary placeholder:text-tertiary font-sans resize-none min-h-[44px] max-h-[200px]" 
+                                rows="1"
+                                placeholder="Message GitHermes..."
+                            ></textarea>
+                            <button class="p-2 bg-primary text-background hover:bg-gold transition-colors rounded-lg mb-1 ml-2" onclick="showToast('Message sent', 'info')">
+                                <i class="ph ph-paper-plane-right text-lg"></i>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- VIEW: REPOSITORIES -->
+            <div id="view-repos" class="absolute inset-0 overflow-y-auto px-8 py-8 flex flex-col gap-6 hidden">
+                <div class="max-w-5xl w-full mx-auto flex justify-between items-center">
+                    <h1 class="text-2xl font-medium text-primary">Repositories</h1>
+                    <button class="px-4 py-2 border border-border text-primary text-sm font-medium rounded-lg hover:bg-surface transition-colors">
+                        <i class="ph ph-plus mr-1"></i> Add Repository
+                    </button>
+                </div>
+                
+                <div class="max-w-5xl w-full mx-auto grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <!-- Detailed Repo Card -->
+                    <div class="p-5 rounded-xl border border-border bg-surface/30 hover:border-gold/30 transition-all flex flex-col gap-4">
+                        <div class="flex justify-between items-start">
+                            <div class="flex items-center gap-3">
+                                <div class="w-10 h-10 rounded-lg bg-surface border border-border flex items-center justify-center">
+                                    <i class="ph ph-git-branch text-primary text-xl"></i>
+                                </div>
+                                <div>
+                                    <h3 class="text-base font-medium text-primary leading-tight">my-nextjs-app</h3>
+                                    <span class="text-xs text-secondary">/home/user/projects/my-nextjs-app</span>
+                                </div>
+                            </div>
+                            <span class="px-2 py-0.5 rounded text-[10px] font-mono border border-border bg-surface text-secondary">Indexed</span>
+                        </div>
+                        <div class="flex gap-4 mt-2 border-t border-border/50 pt-4">
+                            <div class="flex flex-col">
+                                <span class="text-[10px] uppercase tracking-wider text-tertiary">Last Sync</span>
+                                <span class="text-sm text-primary font-mono mt-1">2h ago</span>
+                            </div>
+                            <div class="flex flex-col">
+                                <span class="text-[10px] uppercase tracking-wider text-tertiary">Files</span>
+                                <span class="text-sm text-primary font-mono mt-1">142</span>
+                            </div>
+                            <div class="flex flex-col">
+                                <span class="text-[10px] uppercase tracking-wider text-tertiary">Language</span>
+                                <span class="text-sm text-primary font-mono mt-1">TypeScript</span>
+                            </div>
+                        </div>
+                        <div class="flex gap-2 mt-2">
+                            <button class="flex-1 py-1.5 bg-surface border border-border rounded text-xs text-primary hover:bg-border transition-colors">Analyze</button>
+                            <button class="flex-1 py-1.5 bg-surface border border-border rounded text-xs text-primary hover:bg-border transition-colors">Sync Now</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+        </div>
+    </main>
+</body>
+</html>

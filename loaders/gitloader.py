@@ -1,11 +1,12 @@
-import requests
-from requests.exceptions import HTTPError
-import zipfile
 import io
 import os
+import zipfile
+
+import requests
+from requests.exceptions import HTTPError
 
 
-def validar_url(url_repo: str) -> tuple[bool, str | HTTPError | str]:
+def validar_url(url_repo: str) -> tuple[bool, str | HTTPError]:
     """
     Valida se uma URL de repositório GitHub é acessível.
 
